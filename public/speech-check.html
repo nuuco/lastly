@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chrome 음성인식 에러 코드 점검</title>
+    <style>
+      body {
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        max-width: 520px;
+        margin: 32px auto;
+        padding: 0 16px 48px;
+        line-height: 1.5;
+        color: #18241e;
+      }
+      button {
+        font-size: 15px;
+        padding: 10px 14px;
+        margin: 0 8px 8px 0;
+        cursor: pointer;
+      }
+      #out {
+        margin-top: 12px;
+        min-height: 72px;
+        padding: 12px;
+        border: 1px solid #cfd8d2;
+        border-radius: 10px;
+        white-space: pre-wrap;
+        background: #fcfdfb;
+      }
+      #log {
+        margin-top: 14px;
+        padding: 12px;
+        border-radius: 10px;
+        background: #111;
+        color: #d6ffd6;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        min-height: 160px;
+      }
+      .hint {
+        color: #63736a;
+        font-size: 13px;
+      }
+      code {
+        background: #eef1ec;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Chrome 음성인식 에러 코드</h1>
+    <p class="hint">
+      권한보다 <code>onerror</code> 코드가 원인입니다. 아래 로그의 찍히는 값을
+      알려주세요.
+    </p>
+    <p class="hint" id="meta"></p>
+    <button id="cloud" type="button">서버 받아쓰기 시작</button>
+    <button id="local" type="button">온디바이스(processLocally) 시작</button>
+    <button id="stop" type="button">끝</button>
+    <div id="out">아직 없음</div>
+    <div id="log"></div>
+
+    <script>
+      const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const out = document.getElementById("out");
+      const logEl = document.getElementById("log");
+      const meta = document.getElementById("meta");
+      let recognition = null;
+      let stopped = true;
+      let lines = [];
+
+      function note(msg) {
+        const stamp = new Date().toLocaleTimeString();
+        lines.push(`[${stamp}] ${msg}`);
+        logEl.textContent = lines.join("\n");
+        console.log(msg);
+      }
+
+      meta.textContent = [
+        "secureContext=" + window.isSecureContext,
+        "href=" + location.href,
+        "UA Chrome?=" + /Chrome|Chromium|Edg|OPR/.test(navigator.userAgent),
+        "SpeechRecognition=" + Boolean(Ctor),
+        "available API=" + Boolean(Ctor && Ctor.available),
+      ].join(" · ");
+
+      if (!Ctor) {
+        note("이 브라우저는 SpeechRecognition이 없습니다");
+      }
+
+      async function start(processLocally) {
+        if (!Ctor) return;
+        stopped = false;
+        lines = [];
+        out.textContent = "준비 중…";
+
+        if (recognition) {
+          try {
+            recognition.onend = null;
+            recognition.onerror = null;
+            recognition.abort();
+          } catch (_) {}
+        }
+
+        if (processLocally && typeof Ctor.available === "function") {
+          try {
+            if (typeof Ctor.install === "function") {
+              note("install({ ko-KR, processLocally:true }) 호출");
+              await Ctor.install({ langs: ["ko-KR"], processLocally: true });
+            }
+            const status = await Ctor.available({
+              langs: ["ko-KR"],
+              processLocally: true,
+            });
+            note("available() => " + JSON.stringify(status));
+          } catch (e) {
+            note("available/install 실패: " + (e && e.message ? e.message : e));
+          }
+        }
+
+        recognition = new Ctor();
+        recognition.lang = "ko-KR";
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.maxAlternatives = 1;
+        if (processLocally) {
+          try {
+            recognition.processLocally = true;
+            note("processLocally=true 설정");
+          } catch (e) {
+            note("processLocally 설정 실패: " + e);
+          }
+        }
+
+        recognition.onstart = () => note("시작됨 (onstart)");
+        recognition.onaudiostart = () => note("오디오 시작 (onaudiostart)");
+        recognition.onsoundstart = () => note("소리 감지 (onsoundstart)");
+        recognition.onspeechstart = () => note("말 감지 (onspeechstart)");
+        recognition.onspeechend = () => note("말 끝 (onspeechend)");
+        recognition.onaudioend = () => note("오디오 끝 (onaudioend)");
+
+        recognition.onresult = (event) => {
+          let finalText = "";
+          let interim = "";
+          for (let i = 0; i < event.results.length; i++) {
+            const text = event.results[i][0].transcript;
+            if (event.results[i].isFinal) finalText += text;
+            else interim = text;
+          }
+          out.textContent = finalText + interim || "(빈 결과)";
+          note("onresult pieces=" + event.results.length);
+        };
+
+        recognition.onerror = (e) => {
+          note("에러: " + e.error + (e.message ? " / " + e.message : ""));
+          const tip = {
+            network:
+              "구글 서버 경로 차단(VPN·사내망·광고차단). 마이크 권한 문제가 아님",
+            "not-allowed": "권한 거부 또는 비보안 컨텍스트",
+            "service-not-allowed": "정책/iframe/비보안으로 서비스 차단",
+            "audio-capture": "마이크 장치를 못 잡음",
+            "no-speech": "소리가 안 들어옴",
+            "language-not-supported": "lang 문제 — ko-KR 확인",
+            aborted: "중단됨",
+          }[e.error];
+          if (tip) note("해석: " + tip);
+        };
+
+        recognition.onend = () => {
+          note("종료됨 (onend)" + (stopped ? " · 사용자 종료" : " · 자동 종료"));
+          if (stopped) return;
+          // continuous여도 크롬은 무음이면 스스로 끊는다
+          try {
+            recognition.start();
+            note("자동 재시작 start()");
+          } catch (e) {
+            note("재시작 실패: " + e);
+          }
+        };
+
+        try {
+          recognition.start();
+          out.textContent = "듣고 있어요…";
+          note(
+            "start() 호출됨 · mode=" +
+              (processLocally ? "processLocally" : "cloud"),
+          );
+        } catch (e) {
+          note("start 실패: " + e);
+        }
+      }
+
+      document.getElementById("cloud").onclick = () => void start(false);
+      document.getElementById("local").onclick = () => void start(true);
+      document.getElementById("stop").onclick = () => {
+        stopped = true;
+        try {
+          recognition && recognition.stop();
+        } catch (_) {}
+        note("stop() 호출");
+      };
+    </script>
+  </body>
+</html>
