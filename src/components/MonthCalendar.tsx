@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { nextDueOn, todayKst } from "../lib/kst";
+import { dueDatesInRange, todayKst } from "../lib/kst";
 import type { RecordRow } from "../lib/types";
 
 export type DayPick = {
@@ -56,20 +56,26 @@ export default function MonthCalendar({ rows, onSelectDay }: Props) {
   const { performedBy, dueBy } = useMemo(() => {
     const performedBy = new Map<string, RecordRow[]>();
     const dueBy = new Map<string, RecordRow[]>();
+    const from = toIso(cursor.y, cursor.m, 1);
+    const to = toIso(cursor.y, cursor.m, daysInMonth(cursor.y, cursor.m));
     for (const row of rows) {
       const performed = performedBy.get(row.lastPerformedOn) ?? [];
       performed.push(row);
       performedBy.set(row.lastPerformedOn, performed);
 
-      const due = nextDueOn(row.lastPerformedOn, row.schedule);
-      if (due) {
+      for (const due of dueDatesInRange(
+        row.lastPerformedOn,
+        row.schedule,
+        from,
+        to,
+      )) {
         const list = dueBy.get(due) ?? [];
         list.push(row);
         dueBy.set(due, list);
       }
     }
     return { performedBy, dueBy };
-  }, [rows]);
+  }, [rows, cursor]);
 
   const cells = useMemo(() => {
     const total = daysInMonth(cursor.y, cursor.m);

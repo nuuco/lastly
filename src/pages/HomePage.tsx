@@ -38,6 +38,7 @@ import {
   answerPhrase,
   matchRecords,
   missingPhrase,
+  queryMatchPhrase,
 } from "../recognition/lookup";
 import {
   getLfmLoadError,
@@ -55,6 +56,7 @@ import { negationTokensPreserved } from "../recognition/utteranceRules";
 import {
   cancelledPhrase,
   confirmPhrase,
+  continuePhrase,
   interpretConfirmReply,
   savedPhrase,
   speak,
@@ -71,6 +73,7 @@ import {
   deleteRecord,
   isValidPerformedOn,
   listRecords,
+  normalizeActionKey,
   updateRecord,
   upsertRecord,
 } from "../storage/records";
@@ -81,6 +84,7 @@ type Phase =
   | "transcribing"
   | "thinking"
   | "confirm"
+  | "match"
   | "rejected"
   | "editing"
   | "answer"
@@ -146,6 +150,10 @@ export default function HomePage() {
   const [answerText, setAnswerText] = useState("");
   const [answerRow, setAnswerRow] = useState<RecordRow | null>(null);
   const [answerCandidates, setAnswerCandidates] = useState<RecordRow[]>([]);
+  const [matchMode, setMatchMode] = useState<"query" | "save" | null>(null);
+  const [matchRow, setMatchRow] = useState<RecordRow | null>(null);
+  const [matchCandidates, setMatchCandidates] = useState<RecordRow[]>([]);
+  const [spokenAction, setSpokenAction] = useState("");
   const [dayIso, setDayIso] = useState<string | null>(null);
   const [dayPerformed, setDayPerformed] = useState<RecordRow[]>([]);
   const [dayDue, setDayDue] = useState<RecordRow[]>([]);
@@ -174,6 +182,7 @@ export default function HomePage() {
   const silenceTimerRef = useRef(0);
   const watchdogRef = useRef(0);
   const editScheduleRef = useRef<ReminderSchedule | null>(null);
+  const aliasToAddRef = useRef<string | null>(null);
   const prevScheduleRef = useRef<ReminderSchedule | null>(null);
   /** mic = Analyser, speech = 받아쓰기 조각 활동(Chrome 병행 녹음 불가 시) */
   const levelSourceRef = useRef<"none" | "mic" | "speech">("none");
@@ -275,6 +284,11 @@ export default function HomePage() {
     setAnswerText("");
     setAnswerRow(null);
     setAnswerCandidates([]);
+    setMatchMode(null);
+    setMatchRow(null);
+    setMatchCandidates([]);
+    setSpokenAction("");
+    aliasToAddRef.current = null;
     setDayIso(null);
     setDayPerformed([]);
     setDayDue([]);
@@ -365,7 +379,9 @@ export default function HomePage() {
       lastUtterance: utterance,
       inputPath: path,
       schedule,
+      aliasToAdd: aliasToAddRef.current,
     });
+    aliasToAddRef.current = null;
     setEditAction(action);
     setEditDate(date);
     setPhase("saved");
@@ -401,11 +417,48 @@ export default function HomePage() {
     currentRows: RecordRow[],
   ) => {
     const matched = matchRecords(result.action, currentRows);
-    if (matched.kind === "exact" || matched.kind === "partial") {
+    if (matched.kind === "exact") {
       await showAnswer(answerPhrase(matched.row), path, matched.row);
       return;
     }
+    if (matched.kind === "similar") {
+      setMatchMode("query");
+      setMatchRow(matched.row);
+      setMatchCandidates([]);
+      setSpokenAction(result.action ?? "");
+      setPhase("match");
+      if (path !== "voice") return;
+      setListeningYesNo(true);
+      await speak(queryMatchPhrase(matched.row.actionLabel));
+      try {
+        const heard = await recognizeOnce({ timeoutMs: 5000 });
+        const reply = interpretConfirmReply(heard, {
+          action: matched.row.actionLabel,
+          date: matched.row.lastPerformedOn,
+        });
+        if (reply.kind === "yes") {
+          await showAnswer(answerPhrase(matched.row), path, matched.row);
+          return;
+        }
+        if (reply.kind === "no") {
+          await showAnswer(
+            missingPhrase(result.action ?? ""),
+            path,
+            null,
+          );
+          return;
+        }
+      } catch {
+        // 화면 버튼
+      }
+      setListeningYesNo(false);
+      return;
+    }
     if (matched.kind === "ambiguous") {
+      setMatchMode("query");
+      setMatchRow(null);
+      setMatchCandidates(matched.candidates);
+      setSpokenAction(result.action ?? "");
       await showAnswer(
         "비슷한 기록이 있어요. 화면에서 골라 주세요.",
         path,
@@ -419,6 +472,54 @@ export default function HomePage() {
       path,
       null,
     );
+  };
+
+  const askRecordConfirm = async (
+    startAction: string,
+    startDate: string,
+    utterance: string,
+    path: InputPath,
+    linkedAction?: string,
+  ) => {
+    let action = startAction;
+    let nextDate = startDate;
+    setEditAction(action);
+    setEditDate(nextDate);
+    for (let round = 0; round < 3; round += 1) {
+      const schedule = editScheduleRef.current;
+      setListeningYesNo(true);
+      await speak(confirmPhrase(action, nextDate, schedule));
+      try {
+        const heard = await recognizeOnce({ timeoutMs: 5000 });
+        const reply = interpretConfirmReply(heard, { action, date: nextDate });
+        if (reply.kind === "yes") {
+          await save(action, nextDate, path, utterance, true);
+          return;
+        }
+        if (reply.kind === "no") {
+          await cancelWithVoice(true);
+          return;
+        }
+        if (reply.kind === "revise") {
+          action = reply.action;
+          nextDate = reply.date;
+          setEditAction(action);
+          setEditDate(nextDate);
+          if (
+            linkedAction &&
+            normalizeActionKey(action) !== normalizeActionKey(linkedAction)
+          ) {
+            aliasToAddRef.current = null;
+          }
+          setStatus("말로 고쳤어요. 다시 확인할게요");
+          continue;
+        }
+      } catch {
+        break;
+      }
+    }
+    setListeningYesNo(false);
+    setStatus("화면에서 고친 뒤 기록해도 돼요");
   };
 
   const runParse = async (
@@ -451,45 +552,93 @@ export default function HomePage() {
 
     if (result.utteranceType !== "completed") {
       setPhase("rejected");
+      if (path === "voice") {
+        const copy = REJECT_COPY[result.utteranceType];
+        if (copy) await speak(copy);
+      }
       return;
     }
-    setPhase("confirm");
-    if (path !== "voice" || !result.action) return;
 
-    let action = result.action;
-    let date = result.date ?? todayKst();
-    setEditAction(action);
-    setEditDate(date);
+    const current = await reload();
+    const spoken = (result.action ?? "").trim();
+    const date = result.date ?? todayKst();
+    const matched = matchRecords(spoken || null, current);
 
-    for (let round = 0; round < 3; round += 1) {
-      const schedule = editScheduleRef.current;
+    const fillFrom = (row: RecordRow | null) => {
+      const action = (row?.actionLabel ?? spoken).trim();
+      const sched = result.schedule ?? row?.schedule ?? null;
+      setEditAction(action);
+      setEditDate(date);
+      setEditSchedule(sched);
+      editScheduleRef.current = sched;
+      setSpokenAction(spoken);
+      const alias =
+        row &&
+        spoken &&
+        normalizeActionKey(spoken) !== normalizeActionKey(row.actionLabel)
+          ? spoken
+          : null;
+      aliasToAddRef.current = alias;
+      return { action, date, sched };
+    };
+
+    if (matched.kind === "similar") {
+      const filled = fillFrom(matched.row);
+      setMatchMode("save");
+      setMatchRow(matched.row);
+      setMatchCandidates([]);
+      setPhase("match");
+      if (path !== "voice") return;
       setListeningYesNo(true);
-      await speak(confirmPhrase(action, date, schedule));
+      await speak(continuePhrase(filled.action, filled.date, filled.sched));
       try {
         const heard = await recognizeOnce({ timeoutMs: 5000 });
-        const reply = interpretConfirmReply(heard, { action, date });
+        const reply = interpretConfirmReply(heard, {
+          action: filled.action,
+          date: filled.date,
+        });
         if (reply.kind === "yes") {
-          await save(action, date, path, utterance, true);
+          await save(filled.action, filled.date, path, utterance, true);
           return;
         }
         if (reply.kind === "no") {
-          await cancelWithVoice(true);
+          fillFrom(null);
+          setMatchMode(null);
+          setMatchRow(null);
+          setPhase("confirm");
+          setListeningYesNo(false);
+          setStatus("새 항목으로 기록할 수 있어요");
           return;
         }
-        if (reply.kind === "revise") {
-          action = reply.action;
-          date = reply.date;
-          setEditAction(action);
-          setEditDate(date);
-          setStatus("말로 고쳤어요. 다시 확인할게요");
-          continue;
-        }
       } catch {
-        break;
+        // 화면 버튼
       }
+      setListeningYesNo(false);
+      return;
     }
-    setListeningYesNo(false);
-    setStatus("화면에서 고친 뒤 기록해도 돼요");
+
+    if (matched.kind === "ambiguous") {
+      fillFrom(null);
+      setMatchMode("save");
+      setMatchRow(null);
+      setMatchCandidates(matched.candidates);
+      setPhase("match");
+      if (path === "voice") {
+        await speak("비슷한 기록이 있어요. 화면에서 골라 주세요.");
+      }
+      return;
+    }
+
+    const filled = fillFrom(matched.kind === "exact" ? matched.row : null);
+    setPhase("confirm");
+    if (path !== "voice" || !filled.action) return;
+    await askRecordConfirm(
+      filled.action,
+      filled.date,
+      utterance,
+      path,
+      filled.action,
+    );
   };
 
   const finishWithTranscript = async (
@@ -698,7 +847,55 @@ export default function HomePage() {
     setEditSchedule(null);
     setSource("manual");
     setRaw(parse?.action ?? editAction);
+    aliasToAddRef.current = null;
     setPhase("confirm");
+  };
+
+  const acceptQueryMatch = () => {
+    if (!matchRow) return;
+    void showAnswer(answerPhrase(matchRow), source, matchRow);
+  };
+
+  const rejectQueryMatch = () => {
+    void showAnswer(missingPhrase(spokenAction || parse?.action || ""), source, null);
+  };
+
+  const startNewInstead = () => {
+    const spoken = spokenAction || parse?.action || "";
+    setEditAction(spoken);
+    setEditSchedule(parse?.schedule ?? null);
+    editScheduleRef.current = parse?.schedule ?? null;
+    aliasToAddRef.current = null;
+    setMatchMode(null);
+    setMatchRow(null);
+    setMatchCandidates([]);
+    setPhase("confirm");
+    setListeningYesNo(false);
+    setStatus("새 항목으로 기록할 수 있어요");
+  };
+
+  const linkCandidate = (row: RecordRow) => {
+    const spoken = spokenAction || (parse?.action ?? "").trim();
+    const sched = parse?.schedule ?? row.schedule ?? null;
+    setEditAction(row.actionLabel);
+    setEditSchedule(sched);
+    editScheduleRef.current = sched;
+    aliasToAddRef.current =
+      spoken &&
+      normalizeActionKey(spoken) !== normalizeActionKey(row.actionLabel)
+        ? spoken
+        : null;
+    setMatchRow(row);
+    setMatchCandidates([]);
+    setMatchMode("save");
+    setPhase("match");
+    setListeningYesNo(false);
+  };
+
+  const acceptSaveLink = () => {
+    const action = (matchRow?.actionLabel ?? editAction).trim();
+    if (!action) return;
+    void save(action, editDate, source, raw, source === "voice");
   };
 
   const overlayOpen =
@@ -706,6 +903,7 @@ export default function HomePage() {
     phase === "transcribing" ||
     phase === "thinking" ||
     phase === "confirm" ||
+    phase === "match" ||
     phase === "rejected" ||
     phase === "editing" ||
     phase === "answer" ||
@@ -975,6 +1173,123 @@ export default function HomePage() {
               </div>
             )}
 
+            {phase === "match" && (
+              <div className="result">
+                <div className="eyebrow">비슷한 기록이 있어요</div>
+                {raw ? <div className="quote">“{raw}”</div> : null}
+                {matchMode === "query" && matchRow ? (
+                  <>
+                    <p className="say confirm-ask">
+                      {queryMatchPhrase(matchRow.actionLabel)}
+                    </p>
+                    <div className="parsed">
+                      <div className="name">{matchRow.actionLabel}</div>
+                      <div className="last">
+                        {formatKoreanDate(matchRow.lastPerformedOn)} ·{" "}
+                        {daysSince(matchRow.lastPerformedOn) === 0
+                          ? "오늘"
+                          : `${daysSince(matchRow.lastPerformedOn)}일 전`}
+                      </div>
+                    </div>
+                    {listeningYesNo ? (
+                      <p className="muted listen-hint">응 · 아니</p>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="confirm"
+                      onClick={acceptQueryMatch}
+                    >
+                      맞아요
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={rejectQueryMatch}
+                    >
+                      아니에요
+                    </button>
+                  </>
+                ) : null}
+                {matchMode === "save" && matchRow ? (
+                  <>
+                    <p className="say confirm-ask">
+                      {continuePhrase(
+                        matchRow.actionLabel,
+                        editDate,
+                        editSchedule,
+                      )}
+                    </p>
+                    <div className="parsed">
+                      <label>기존 항목</label>
+                      <div className="name">{matchRow.actionLabel}</div>
+                      {spokenAction &&
+                      normalizeActionKey(spokenAction) !==
+                        normalizeActionKey(matchRow.actionLabel) ? (
+                        <p className="muted">
+                          “{spokenAction}”을 {matchRow.actionLabel}로 이어요
+                        </p>
+                      ) : null}
+                      <label>날짜</label>
+                      <DateField value={editDate} onChange={setEditDate} />
+                      <IntervalChips
+                        value={editSchedule}
+                        anchorDate={editDate}
+                        onChange={(next) => {
+                          setEditSchedule(next);
+                          editScheduleRef.current = next;
+                        }}
+                      />
+                    </div>
+                    {listeningYesNo ? (
+                      <p className="muted listen-hint">응 · 아니</p>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="confirm"
+                      onClick={acceptSaveLink}
+                    >
+                      이어서 기록
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={startNewInstead}
+                    >
+                      새로 기록
+                    </button>
+                  </>
+                ) : null}
+                {matchMode === "save" && !matchRow && matchCandidates.length > 0 ? (
+                  <>
+                    <p className="say">어떤 항목에 이을까요?</p>
+                    <div className="candidate-list">
+                      {matchCandidates.map((row) => (
+                        <button
+                          key={row.actionKey}
+                          type="button"
+                          className="candidate"
+                          onClick={() => linkCandidate(row)}
+                        >
+                          {row.actionLabel}
+                          <span>{formatKoreanDate(row.lastPerformedOn)}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={startNewInstead}
+                    >
+                      새로 기록
+                    </button>
+                  </>
+                ) : null}
+                <button type="button" className="ghost" onClick={closeSheet}>
+                  닫기
+                </button>
+              </div>
+            )}
+
             {phase === "confirm" && (
               <div className="result">
                 <div className="eyebrow">이렇게 들었어요</div>
@@ -990,6 +1305,13 @@ export default function HomePage() {
                     value={editAction}
                     onChange={(event) => setEditAction(event.target.value)}
                   />
+                  {spokenAction &&
+                  normalizeActionKey(spokenAction) !==
+                    normalizeActionKey(editAction) ? (
+                    <p className="muted">
+                      “{spokenAction}”을 {editAction}로 이어서 기록합니다
+                    </p>
+                  ) : null}
                   <label>날짜</label>
                   <DateField value={editDate} onChange={setEditDate} />
                   <IntervalChips
@@ -1205,15 +1527,17 @@ export default function HomePage() {
                     type="button"
                     className="confirm"
                     disabled={!editAction.trim()}
-                    onClick={() =>
-                      void save(
-                        editAction.trim(),
-                        editDate,
-                        source,
-                        raw,
-                        source === "voice",
-                      )
-                    }
+                    onClick={() => {
+                      setPhase("confirm");
+                      if (source === "voice") {
+                        void askRecordConfirm(
+                          editAction.trim(),
+                          editDate,
+                          raw,
+                          source,
+                        );
+                      }
+                    }}
                   >
                     이대로 기록할게요
                   </button>

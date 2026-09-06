@@ -52,6 +52,14 @@ function objectParticle(word: string): string {
   return code % 28 === 0 ? "를" : "을";
 }
 
+export function topicParticle(word: string): string {
+  const last = word.at(-1);
+  if (!last || !/[가-힣]/.test(last)) return "는";
+  const code = last.charCodeAt(0) - 0xac00;
+  if (code < 0) return "는";
+  return code % 28 === 0 ? "는" : "은";
+}
+
 export function confirmPhrase(
   action: string,
   date: string,
@@ -76,6 +84,32 @@ export function confirmPhrase(
     return `${action}${objectParticle(action)} ${label}로 기록하고, ${part}${connector} 알려줄까요?`;
   }
   return `${action}${objectParticle(action)} ${label}로 기록할까요?`;
+}
+
+export function continuePhrase(
+  action: string,
+  date: string,
+  schedule?: ReminderSchedule | number | null,
+  now = new Date(),
+): string {
+  const label = formatSpeakDate(date, now);
+  let sched: ReminderSchedule | null = null;
+  if (typeof schedule === "number") {
+    sched = schedule >= 1 ? { kind: "everyDays", days: schedule } : null;
+  } else {
+    sched = normalizeSchedule(schedule);
+  }
+  const part = sched ? formatScheduleLabel(sched) : null;
+  if (sched && part) {
+    const connector =
+      sched.kind === "weekly" ||
+      sched.kind === "monthlyDay" ||
+      sched.kind === "monthlyNthWeekday"
+        ? "에"
+        : "";
+    return `${action}${objectParticle(action)} ${label}로 이어서 기록하고, ${part}${connector} 알려줄까요?`;
+  }
+  return `${action}${objectParticle(action)} ${label}로 이어서 기록할까요?`;
 }
 
 export function savedPhrase(): string {

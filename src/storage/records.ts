@@ -31,6 +31,31 @@ type StoredRecord = Partial<RecordRow> &
   };
 
 /** 저장 행을 현재 스키마로 맞춤. intervalDays는 읽기 이관만 */
+export function normalizeAliases(
+  aliases: string[] | undefined,
+  actionLabel: string,
+): string[] {
+  const key = normalizeActionKey(actionLabel);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of aliases ?? []) {
+    const next = normalizeActionKey(raw);
+    if (!next || next === key || seen.has(next)) continue;
+    seen.add(next);
+    out.push(next);
+  }
+  return out;
+}
+
+export function mergeAliases(
+  previous: string[] | undefined,
+  actionLabel: string,
+  extra?: string | null,
+): string[] {
+  const extras = extra ? [...(previous ?? []), extra] : (previous ?? []);
+  return normalizeAliases(extras, actionLabel);
+}
+
 export function normalizeRow(raw: StoredRecord): RecordRow {
   const schedule = normalizeSchedule(
     raw.schedule ?? scheduleFromIntervalDays(raw.intervalDays),
@@ -42,13 +67,14 @@ export function normalizeRow(raw: StoredRecord): RecordRow {
     lastUtterance: raw.lastUtterance,
     inputPath: raw.inputPath,
     schedule,
+    aliases: normalizeAliases(raw.aliases, raw.actionLabel),
     updatedAt: raw.updatedAt,
   };
 }
 
 function db() {
   if (!dbPromise) {
-    dbPromise = openDB<LastlyDb>("lastly", 3, {
+    dbPromise = openDB<LastlyDb>("lastly", 4, {
       upgrade(database, oldVersion) {
         if (oldVersion < 1) {
           const store = database.createObjectStore("records", {
@@ -57,6 +83,7 @@ function db() {
           store.createIndex("updatedAt", "updatedAt");
         }
         // v3: schedule. 예전 intervalDays는 normalizeRow에서 이관
+        // v4: aliases. 기존 행은 normalizeRow에서 []
       },
     });
   }
@@ -73,6 +100,7 @@ export async function upsertRecord(input: {
   lastUtterance: string;
   inputPath: InputPath;
   schedule?: ReminderSchedule | null;
+  aliasToAdd?: string | null;
 }): Promise<RecordRow> {
   const database = await db();
   const actionKey = normalizeActionKey(input.actionLabel);
@@ -88,6 +116,7 @@ export async function upsertRecord(input: {
     lastUtterance: input.lastUtterance,
     inputPath: input.inputPath,
     schedule,
+    aliases: mergeAliases(prev?.aliases, input.actionLabel, input.aliasToAdd),
     updatedAt: new Date().toISOString(),
   };
   await database.put("records", row);
@@ -115,6 +144,7 @@ export async function updateRecord(input: {
     lastUtterance: prev?.lastUtterance ?? input.actionLabel.trim(),
     inputPath: prev?.inputPath ?? "manual",
     schedule,
+    aliases: mergeAliases(prev?.aliases, input.actionLabel),
     updatedAt: new Date().toISOString(),
   };
   await database.put("records", row);

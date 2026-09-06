@@ -958,7 +958,7 @@ input {
   padding: 4px 2px 4px;
   flex-direction: column;
   justify-content: flex-start;
-  gap: 2px;
+  gap: 0;
 }
 
 .month-day > span:first-of-type {
@@ -966,7 +966,7 @@ input {
   align-items: center;
   justify-content: center;
   width: 30px;
-  height: 30px;
+  height: 24px;
   border-radius: 50%;
   font-size: 13px;
   line-height: 1;
@@ -1008,6 +1008,7 @@ input {
   display: flex;
   gap: 3px;
   min-height: 12px;
+  margin-top: -2px;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;

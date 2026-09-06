@@ -47,6 +47,8 @@ export type RecordRow = {
   lastUtterance: string;
   inputPath: InputPath;
   schedule: ReminderSchedule | null;
+  /** 같은 항목으로 확인된 다른 호칭 */
+  aliases: string[];
   updatedAt: string;
 };
 

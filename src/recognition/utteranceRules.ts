@@ -1,4 +1,4 @@
-import type { ParseResult, UtteranceType } from "../lib/types";
+import type { ParseResult } from "../lib/types";
 import { extractRelativeDate } from "./dates";
 import { extractSchedule, stripIntervalPhrase } from "./intervals";
 import { stripPrefix } from "./prefix";
@@ -69,6 +69,7 @@ const UNCERTAIN = [
 ];
 
 const COMPLETED = [
+  /했고/,
   /했어/,
   /했다/,
   /해놨어/,
@@ -87,6 +88,8 @@ const QUERY = [
   /언제\s*했어/,
   /언제\s*했지/,
   /언제\s*했나요/,
+  /언제\s*했는지/,
+  /언제\s*한\s*건지/,
   /언제\s*한\s*거/,
   /언제\s*야\s*\??$/,
   /언제야\s*\??$/,
@@ -98,6 +101,7 @@ const QUERY = [
   /며칠\s*전(?:에)?\s*(?:했어|했지)/,
   /언제\s*갈았어\s*\??$/,
   /언제\s*빨았어\s*\??$/,
+  /언제.{0,24}알려\s*(?:줘|주세요)/,
 ];
 
 function firstMatch(text: string, patterns: RegExp[]): string | null {
@@ -138,6 +142,8 @@ const ACTION_DROP = new Set([
   "언제",
   "다시",
   "한",
+  "했고",
+  "앞으로",
 ]);
 
 function finalizeAction(raw: string): string | null {
@@ -210,23 +216,24 @@ export function guessAction(text: string): string | null {
     .replace(/마다/g, " ")
     .replace(/알려\s*줘|알려\s*주세요|알림/g, " ")
     .replace(
-      /언제\s*(?:했어|했지|했나요|한\s*거|야|갈았어|빨았어)?|언제였/g,
+      /언제\s*(?:했어|했지|했나요|했는지|한\s*건지|한\s*거|야|갈았어|빨았어)?|언제였/g,
       " ",
     )
+    .replace(/했는지|한\s*건지/g, " ")
     .replace(/마지막(?:으로)?(?:에)?/g, " ")
     .replace(/한\s*지|한지|지가|(?:^|\s)지(?:\s|$)/g, " ")
     .replace(/며칠(?:\s*(?:됐어|됐지|이야|인가요))?/g, " ")
     .replace(/얼마야|꽤\s*된|지\s*싶(?:어)?|싶어/g, " ")
     .replace(/(?:^|\s)나\s+/g, " ")
     .replace(/끝낸\s*줄\s*알았는데|나중에\s*하고|그대로\s+두고|안\s+건드리고/g, " ")
-    .replace(/하려고\s*했는데|하려다|하려고|했는데/g, " ")
+    .replace(/하려고\s*했는데|하려다|하려고|했는데|앞으로(?:는)?/g, " ")
     .replace(/한\s*것\s*같기도\s*하고|안\s*한\s*것\s*같기도\s*해/g, " ")
     .replace(/것\s*같(?:은데|아|기도)?/g, " ")
     .replace(/기억이\s*안\s*나|모르겠어|정확히\s*언제인지/g, " ")
     .replace(/아마|쯤|던\s*것\s*같은데|더라|였나|했던가|인가|이었나/g, " ")
     .replace(/못\s*|아직(?:이야|이고)?\s*|안\s*/g, " ")
     .replace(
-      /했어도|했어|했다|해놨어|끝냈어|갈았어|빨았어|빨아놨어|버렸어|돌렸어|시켰어|닦았어/g,
+      /했어도|했고|했어|했다|해놨어|끝냈어|갈았어|빨았어|빨아놨어|버렸어|돌렸어|시켰어|닦았어/g,
       " ",
     )
     .replace(
@@ -267,7 +274,7 @@ export function classifyUtterance(raw: string, now = new Date()): ParseResult {
 
   // 조회는 부정·예정과 겹치지 않을 때 우선. “더라/싶어” 류는 불확실
   if (query && !incomplete && !planned) {
-    if (uncertain && hedgeUncertain && !/언제\s*했어|한\s*지\s*(?:며칠|얼마)/.test(text)) {
+    if (uncertain && hedgeUncertain && !/언제\s*했(?:어|는지)|한\s*지\s*(?:며칠|얼마)/.test(text)) {
       // fall through
     } else {
       return {
@@ -312,8 +319,8 @@ export function classifyUtterance(raw: string, now = new Date()): ParseResult {
     };
   }
 
-  const endsPlanned = /거야|할게|시킬게|려고|예정이야\s*$/.test(text);
-  if (planned && (endsPlanned || !completed)) {
+  // 완료 동사가 있으면 “앞으로 하려고”는 주기로 보고 완료로 저장
+  if (planned && !completed) {
     return {
       ...base,
       utteranceType: "planned",
@@ -335,16 +342,6 @@ export function classifyUtterance(raw: string, now = new Date()): ParseResult {
     };
   }
 
-  if (planned) {
-    return {
-      ...base,
-      utteranceType: "planned",
-      date: null,
-      provider: "utterance-rules",
-      reason: `예정 표지 “${planned}”`,
-    };
-  }
-
   return {
     ...base,
     utteranceType: "uncertain",
@@ -353,10 +350,6 @@ export function classifyUtterance(raw: string, now = new Date()): ParseResult {
     provider: "utterance-rules",
     reason: "완료로 보기 어려워 확인이 필요합니다",
   };
-}
-
-export function skipLlm(type: UtteranceType): boolean {
-  return type === "planned" || type === "incomplete" || type === "query";
 }
 
 export function negationTokensPreserved(transcript: string): boolean {

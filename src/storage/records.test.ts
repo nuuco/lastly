@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidPerformedOn, normalizeActionKey, normalizeRow } from "./records";
+import { isValidPerformedOn, mergeAliases, normalizeActionKey, normalizeRow } from "./records";
 
 describe("normalizeActionKey", () => {
   it("공백을 한 칸으로 맞춘다", () => {
@@ -40,5 +40,17 @@ describe("normalizeRow", () => {
         intervalDays: 7,
       }).schedule,
     ).toEqual({ kind: "weekly", weekday: 1 });
+  });
+
+  it("별칭이 없으면 빈 배열이다", () => {
+    expect(normalizeRow(base).aliases).toEqual([]);
+  });
+});
+
+describe("mergeAliases", () => {
+  it("본문 이름과 같은 별칭은 넣지 않는다", () => {
+    expect(mergeAliases(["이불 빨래", "침구"], "이불 빨래", "이불 세탁")).toEqual(
+      ["침구", "이불 세탁"],
+    );
   });
 });

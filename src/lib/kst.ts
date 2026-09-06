@@ -223,6 +223,67 @@ export function nextDueOn(
   return null;
 }
 
+/** 고정 일수 주기면 간격, 아니면 null (월·년·몇째 요일은 달마다 길이가 다름) */
+function fixedCycleDays(
+  schedule: ReminderSchedule | number | null | undefined,
+): number | null {
+  if (typeof schedule === "number") return schedule >= 1 ? schedule : null;
+  const normalized = normalizeSchedule(schedule);
+  if (!normalized) return null;
+  if (normalized.kind === "everyDays" && normalized.days >= 1) {
+    return normalized.days;
+  }
+  if (normalized.kind === "everyWeeks" && normalized.weeks >= 1) {
+    return normalized.weeks * 7;
+  }
+  if (normalized.kind === "weekly") return 7;
+  return null;
+}
+
+/**
+ * [fromIso, toIso] 안의 주기 해당일. 달력 노란 점용.
+ * 마지막 수행일 다음부터, 다시 기록하기 전까지 같은 간격으로 이어진다.
+ */
+export function dueDatesInRange(
+  lastPerformedOn: string,
+  schedule: ReminderSchedule | number | null | undefined,
+  fromIso: string,
+  toIso: string,
+): string[] {
+  if (fromIso > toIso) return [];
+  const first = nextDueOn(lastPerformedOn, schedule);
+  if (!first || first > toIso) return [];
+
+  const out: string[] = [];
+  const step = fixedCycleDays(schedule);
+
+  if (step != null) {
+    let d = first;
+    if (d < fromIso) {
+      const gap = daysBetween(d, fromIso);
+      d = addDaysIso(d, Math.ceil(gap / step) * step);
+    }
+    let guard = 0;
+    while (d <= toIso && guard < 400) {
+      if (d >= fromIso) out.push(d);
+      d = addDaysIso(d, step);
+      guard += 1;
+    }
+    return out;
+  }
+
+  let d: string | null = first;
+  let guard = 0;
+  while (d && d <= toIso && guard < 600) {
+    if (d >= fromIso) out.push(d);
+    const next = nextDueOn(d, schedule);
+    if (!next || next <= d) break;
+    d = next;
+    guard += 1;
+  }
+  return out;
+}
+
 export function isOverdue(
   lastPerformedOn: string,
   schedule: ReminderSchedule | number | null | undefined,

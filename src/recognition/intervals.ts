@@ -209,6 +209,16 @@ export function extractSchedule(
     };
   }
 
+  const biweekly = text.match(
+    /이\s*주마다|이주마다|두\s*주마다|두주마다|이주\s*에\s*한\s*번|두\s*주에\s*한\s*번/u,
+  );
+  if (biweekly) {
+    return {
+      schedule: { kind: "everyWeeks", weeks: 2 },
+      matched: biweekly[0],
+    };
+  }
+
   const named: Array<[RegExp, number]> = [
     [/보름마다/u, 15],
     [/일주일마다|한\s*주마다|한주마다|(?<!\d)주마다/u, 7],
@@ -228,14 +238,6 @@ export function extractSchedule(
     return {
       schedule: { kind: "everyWeeks", weeks: 1 },
       matched: everyWeek[0],
-    };
-  }
-
-  const biweekly = text.match(/이\s*주마다|이주마다|이주\s*에\s*한\s*번/u);
-  if (biweekly) {
-    return {
-      schedule: { kind: "everyWeeks", weeks: 2 },
-      matched: biweekly[0],
     };
   }
 

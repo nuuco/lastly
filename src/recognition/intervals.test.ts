@@ -56,5 +56,17 @@ describe("extractSchedule", () => {
       kind: "everyWeeks",
       weeks: 2,
     });
+    expect(extractSchedule("이주마다")?.schedule).toEqual({
+      kind: "everyWeeks",
+      weeks: 2,
+    });
+    expect(extractSchedule("이 주마다")?.schedule).toEqual({
+      kind: "everyWeeks",
+      weeks: 2,
+    });
+    expect(extractSchedule("두 주마다")?.schedule).toEqual({
+      kind: "everyWeeks",
+      weeks: 2,
+    });
   });
 });

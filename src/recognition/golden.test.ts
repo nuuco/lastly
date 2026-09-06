@@ -40,6 +40,7 @@ function seedRows(): RecordRow[] {
     lastUtterance: label,
     inputPath: "text" as const,
     schedule: null,
+    aliases: [],
     updatedAt: "2026-09-06T00:00:00.000Z",
   }));
 }
@@ -122,13 +123,13 @@ describe("골든셋 전수", () => {
       expect(fx.lookupSeed, `#${fx.id} lookupSeed 없음`).toBeTruthy();
       const hit = matchRecords(result.action, seedRows());
       const matchedLabel =
-        hit.kind === "exact" || hit.kind === "partial"
+        hit.kind === "exact" || hit.kind === "similar"
           ? hit.row.actionLabel
           : hit.kind === "ambiguous"
             ? hit.candidates.map((c) => c.actionLabel)
             : null;
       const ok =
-        (hit.kind === "exact" || hit.kind === "partial") &&
+        (hit.kind === "exact" || hit.kind === "similar") &&
         hit.row.actionLabel === fx.lookupSeed;
       expect(
         ok,

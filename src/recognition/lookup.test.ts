@@ -3,13 +3,19 @@ import { addDaysIso, isOverdue } from "../lib/kst";
 import { matchRecords, answerPhrase } from "./lookup";
 import type { RecordRow } from "../lib/types";
 
-const row = (label: string, date: string, interval: number | null = null): RecordRow => ({
+const row = (
+  label: string,
+  date: string,
+  interval: number | null = null,
+  aliases: string[] = [],
+): RecordRow => ({
   actionKey: label,
   actionLabel: label,
   lastPerformedOn: date,
   lastUtterance: label,
   inputPath: "voice",
   schedule: interval != null ? { kind: "everyDays", days: interval } : null,
+  aliases,
   updatedAt: "2026-09-06T00:00:00.000Z",
 });
 
@@ -18,18 +24,52 @@ describe("lookup", () => {
     const rows = [row("이불 빨래", "2026-09-02"), row("필터 교체", "2026-08-01")];
     const hit = matchRecords("이불 빨래", rows);
     expect(hit.kind).toBe("exact");
-    if (hit.kind === "exact" || hit.kind === "partial") {
+    if (hit.kind === "exact" || hit.kind === "similar") {
       expect(hit.row.actionLabel).toBe("이불 빨래");
     }
   });
 
+  it("동의어는 비슷함으로 물어보게 한다", () => {
+    const rows = [row("이불 빨래", "2026-09-02")];
+    const laundry = matchRecords("이불 세탁", rows);
+    expect(laundry.kind).toBe("similar");
+    if (laundry.kind === "similar") {
+      expect(laundry.row.actionLabel).toBe("이불 빨래");
+    }
+    const bedding = matchRecords("침구", rows);
+    expect(bedding.kind).toBe("similar");
+    if (bedding.kind === "similar") {
+      expect(bedding.row.actionLabel).toBe("이불 빨래");
+    }
+  });
+
+  it("별칭이 있으면 같은 항목으로 본다", () => {
+    const rows = [row("이불 빨래", "2026-09-02", null, ["침구 세탁"])];
+    const hit = matchRecords("침구 세탁", rows);
+    expect(hit.kind).toBe("exact");
+    if (hit.kind === "exact") {
+      expect(hit.row.actionLabel).toBe("이불 빨래");
+    }
+  });
+
+  it("대상이 다른 청소는 비슷한 항목이 아니다", () => {
+    const rows = [
+      row("화장실 청소", "2026-09-02"),
+      row("선풍기 청소", "2026-09-01"),
+    ];
+    expect(matchRecords("에어컨 청소", rows).kind).toBe("none");
+  });
+
   it("답변 문구를 만든다", () => {
     const now = new Date("2026-09-06T12:00:00+09:00");
-    expect(answerPhrase(row("이불 빨래", "2026-09-02"), now)).toContain(
-      "이불 빨래",
+    expect(answerPhrase(row("이불 빨래", "2026-09-06"), now)).toBe(
+      "이불 빨래는 오늘 했어요.",
     );
-    expect(answerPhrase(row("이불 빨래", "2026-09-02"), now)).toContain(
-      "4일 지났어요",
+    expect(answerPhrase(row("이불 빨래", "2026-09-05"), now)).toBe(
+      "이불 빨래는 어제 했어요.",
+    );
+    expect(answerPhrase(row("이불 빨래", "2026-09-02"), now)).toBe(
+      "이불 빨래는 9월 2일에 했어요. 4일 지났어요.",
     );
   });
 });

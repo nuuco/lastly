@@ -3,6 +3,7 @@ import {
   cancelledPhrase,
   classifyConfirm,
   confirmPhrase,
+  continuePhrase,
   formatSpeakDate,
   interpretConfirmReply,
   savedPhrase,
@@ -42,6 +43,9 @@ describe("voice confirm", () => {
         now,
       ),
     ).toBe("이불 빨래를 오늘로 기록하고, 매주 금요일에 알려줄까요?");
+    expect(continuePhrase("이불 빨래", "2026-09-05", null, now)).toBe(
+      "이불 빨래를 어제로 이어서 기록할까요?",
+    );
   });
 
   it("저장·취소 결과 문구", () => {
