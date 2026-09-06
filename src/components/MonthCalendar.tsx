@@ -61,7 +61,7 @@ export default function MonthCalendar({ rows, onSelectDay }: Props) {
       performed.push(row);
       performedBy.set(row.lastPerformedOn, performed);
 
-      const due = nextDueOn(row.lastPerformedOn, row.schedule ?? row.intervalDays);
+      const due = nextDueOn(row.lastPerformedOn, row.schedule);
       if (due) {
         const list = dueBy.get(due) ?? [];
         list.push(row);
@@ -79,7 +79,7 @@ export default function MonthCalendar({ rows, onSelectDay }: Props) {
     for (let day = 1; day <= total; day += 1) {
       list.push({ iso: toIso(cursor.y, cursor.m, day), day });
     }
-    while (list.length % 7 !== 0) list.push(null);
+    while (list.length < 42) list.push(null);
     return list;
   }, [cursor]);
 

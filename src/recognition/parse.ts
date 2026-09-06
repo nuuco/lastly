@@ -2,7 +2,6 @@ import type { ParseResult } from "../lib/types";
 import { todayKst } from "../lib/kst";
 import { classifyUtterance, skipLlm } from "./utteranceRules";
 import { extractRelativeDate } from "./dates";
-import { extractSchedule, intervalDaysFromSchedule } from "./intervals";
 import { disposeWhisper } from "./stt";
 
 type LfmOut =
@@ -108,24 +107,15 @@ function looksIso(value: string | null): value is string {
 
 export async function parseUtterance(raw: string): Promise<ParseResult> {
   const rules = classifyUtterance(raw);
-  // 주기 문구는 규칙으로 다시 한 번 확정 (LFM이 덮어쓰지 않음)
-  const scheduleHit = extractSchedule(raw);
-  const withSchedule: ParseResult = {
-    ...rules,
-    schedule: scheduleHit?.schedule ?? rules.schedule,
-    intervalDays:
-      intervalDaysFromSchedule(scheduleHit?.schedule ?? rules.schedule) ??
-      rules.intervalDays,
-  };
 
-  if (skipLlm(withSchedule.utteranceType)) {
-    return withSchedule;
+  if (skipLlm(rules.utteranceType)) {
+    return rules;
   }
 
   const relative = extractRelativeDate(raw);
-  if (withSchedule.utteranceType === "completed" && withSchedule.action && relative) {
+  if (rules.utteranceType === "completed" && rules.action && relative) {
     return {
-      ...withSchedule,
+      ...rules,
       date: relative.date,
       confidenceSource: "regex",
       provider: "utterance-rules+date-regex",
@@ -137,22 +127,22 @@ export async function parseUtterance(raw: string): Promise<ParseResult> {
     await loadLfm();
     const extracted = await extractWithLfm(raw, todayKst());
     return {
-      ...withSchedule,
-      action: extracted.action || withSchedule.action,
+      ...rules,
+      action: extracted.action || rules.action,
       date: looksIso(extracted.date)
         ? extracted.date
-        : (relative?.date ?? withSchedule.date),
+        : (relative?.date ?? rules.date),
       provider: "lfm2.5-350m-q4",
-      reason: `${withSchedule.reason} · LFM이 행동·날짜를 보완`,
+      reason: `${rules.reason} · LFM이 행동·날짜를 보완`,
     };
   } catch {
     return {
-      ...withSchedule,
-      date: relative?.date ?? withSchedule.date,
+      ...rules,
+      date: relative?.date ?? rules.date,
       provider: "utterance-rules",
       reason: lastError
-        ? `${withSchedule.reason} · LFM 로드 실패, 규칙만 사용`
-        : withSchedule.reason,
+        ? `${rules.reason} · LFM 로드 실패, 규칙만 사용`
+        : rules.reason,
     };
   }
 }

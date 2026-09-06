@@ -391,7 +391,6 @@ export default function RecordPage() {
                   utteranceType: "completed",
                   action: manualAction.trim(),
                   date: manualDate,
-                  intervalDays: null,
                   schedule: null,
                   confidence: 1,
                   confidenceSource: "none",

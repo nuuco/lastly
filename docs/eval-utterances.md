@@ -1,4 +1,6 @@
-# 골든셋 60문장
+# 골든셋 문장
+
+유형당 15개(1–60). 각 유형 마지막 5개는 혼합 함정. 61–75는 조회·주기, 76–79는 주기 칩 말투.
 
 유형당 15개. 각 유형 마지막 5개는 혼합 함정.
 
@@ -95,14 +97,20 @@
 | 63 | 청소기 돌린 지 며칠 됐어? | query |
 | 64 | 마지막에 커튼 언제 빨았어? | query |
 | 65 | 설거지 언제 했지? | query |
-| 66 | 오늘 이불 빨았어, 일주일마다 알려줘 | completed + intervalDays=7 |
-| 67 | 어제 필터 갈았어 3일마다 | completed + intervalDays=3 |
-| 68 | 쓰레기 버렸어 보름마다 알려줘 | completed + intervalDays=15 |
-| 69 | 강아지 목욕시켰어 한 달마다 | completed + intervalDays=30 |
-| 70 | 오늘 설거지 끝냈어 | completed + intervalDays=null |
+| 66 | 오늘 이불 빨았어, 일주일마다 알려줘 | completed + everyDays 7 |
+| 67 | 어제 필터 갈았어 3일마다 | completed + everyDays 3 |
+| 68 | 쓰레기 버렸어 보름마다 알려줘 | completed + everyDays 15 |
+| 69 | 강아지 목욕시켰어 한 달마다 | completed + everyMonths 1 |
+| 70 | 오늘 설거지 끝냈어 | completed + schedule 없음 |
 | 71 | 이불 빨래 한 지 얼마야? | query |
 | 72 | 필터 언제 갈았어? | query |
 | 73 | 에어컨 청소 언제 했어 | query |
-| 74 | 오늘 커튼 빨았어 14일마다 알려줘 | completed + intervalDays=14 |
-| 75 | 화장실 청소했어 이틀마다 | completed + intervalDays=2 |
+| 74 | 오늘 커튼 빨았어 14일마다 알려줘 | completed + everyDays 14 |
+| 75 | 화장실 청소했어 이틀마다 | completed + everyDays 2 |
+| 76 | 오늘 이불 빨았어 매주 금요일 알려줘 | completed + weekly 금 |
+| 77 | 오늘 필터 갈았어 매월 10일마다 알려줘 | completed + monthlyDay 10 |
+| 78 | 오늘 화장실 청소했어 매월 마지막 수요일 알려줘 | completed + monthlyNthWeekday 마지막 수 |
+| 79 | 오늘 커튼 빨았어 매월 둘째 일요일 알려줘 | completed + monthlyNthWeekday 둘째 일 |
+
+실행용 기대값(행동·날짜·주기)은 `src/recognition/evalFixtures.ts`가 단일 원천이다. `npm test`가 문서 표 행 수와 픽스처 길이를 같게 잠근다.
 

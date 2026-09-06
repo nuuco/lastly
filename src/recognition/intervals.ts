@@ -37,15 +37,35 @@ const NTH_FROM_KO: Record<string, MonthWeekOrdinal> = {
   마지막: -1,
 };
 
-export const INTERVAL_CHIPS: Array<{
+export function weekdayFromIso(iso: string): Weekday {
+  return new Date(`${iso}T12:00:00+09:00`).getDay() as Weekday;
+}
+
+export function dayFromIso(iso: string): number {
+  return Number(iso.slice(8, 10));
+}
+
+/** 빠른 선택 프리셋 (맞춤은 IntervalChips에서 별도) */
+export function intervalPresets(): Array<{
+  id: string;
   label: string;
   schedule: ReminderSchedule | null;
-}> = [
-  { label: "없음", schedule: null },
-  { label: "7일", schedule: { kind: "everyDays", days: 7 } },
-  { label: "14일", schedule: { kind: "everyDays", days: 14 } },
-  { label: "30일", schedule: { kind: "everyDays", days: 30 } },
-];
+}> {
+  return [
+    { id: "none", label: "없음", schedule: null },
+    { id: "d7", label: "7일", schedule: { kind: "everyDays", days: 7 } },
+    { id: "d14", label: "14일", schedule: { kind: "everyDays", days: 14 } },
+    { id: "d30", label: "30일", schedule: { kind: "everyDays", days: 30 } },
+  ];
+}
+
+/** IndexedDB 구버전 숫자 주기 → schedule. 쓰기에는 쓰지 않음 */
+export function scheduleFromIntervalDays(
+  days: number | null | undefined,
+): ReminderSchedule | null {
+  if (days == null || !Number.isInteger(days) || days < 1) return null;
+  return { kind: "everyDays", days };
+}
 
 /** 구형 monthlyLast 등을 현재 스키마로 */
 export function normalizeSchedule(
@@ -60,22 +80,6 @@ export function normalizeSchedule(
     };
   }
   return schedule;
-}
-
-export function scheduleFromIntervalDays(
-  days: number | null | undefined,
-): ReminderSchedule | null {
-  if (days == null || days < 1) return null;
-  return { kind: "everyDays", days };
-}
-
-export function intervalDaysFromSchedule(
-  schedule: ReminderSchedule | null | undefined,
-): number | null {
-  const s = normalizeSchedule(schedule);
-  if (!s) return null;
-  if (s.kind === "everyDays") return s.days;
-  return null;
 }
 
 export function schedulesEqual(
@@ -109,6 +113,12 @@ export function schedulesEqual(
     return left.nth === right.nth && left.weekday === right.weekday;
   }
   return false;
+}
+
+export function isIntervalPreset(
+  schedule: ReminderSchedule | null | undefined,
+): boolean {
+  return intervalPresets().some((c) => schedulesEqual(c.schedule, schedule));
 }
 
 export function formatScheduleLabel(
@@ -161,7 +171,7 @@ export function extractSchedule(
     }
   }
 
-  const monthlyDay = text.match(/매월\s*(\d{1,2})\s*일/u);
+  const monthlyDay = text.match(/매월\s*(\d{1,2})\s*일(?:\s*마다)?/u);
   if (monthlyDay) {
     const day = Number(monthlyDay[1]);
     if (day >= 1 && day <= 31) {
@@ -281,15 +291,6 @@ export function extractSchedule(
     }
   }
   return null;
-}
-
-/** @deprecated extractSchedule 사용 */
-export function extractIntervalDays(
-  text: string,
-): { days: number; matched: string } | null {
-  const hit = extractSchedule(text);
-  if (!hit || hit.schedule.kind !== "everyDays") return null;
-  return { days: hit.schedule.days, matched: hit.matched };
 }
 
 export function stripIntervalPhrase(text: string): string {

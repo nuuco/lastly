@@ -18,6 +18,7 @@ export type SpeechRecognitionHandle = {
 type SpeechCallbacks = {
   onResult: (finalText: string, interimText: string) => void;
   onError: (kind: SpeechErrorKind) => void;
+  onStart?: () => void;
   onEnd?: () => void;
 };
 
@@ -30,6 +31,7 @@ type SpeechRecognitionLike = {
   maxAlternatives: number;
   onresult: ((event: SpeechRecognitionEventLike) => void) | null;
   onerror: ((event: { error: string }) => void) | null;
+  onstart: (() => void) | null;
   onend: (() => void) | null;
   start: () => void;
   stop: () => void;
@@ -329,6 +331,10 @@ export function createSpeechRecognition(
       restartTimer = null;
       tryStart();
     }, delayMs);
+  };
+
+  recognition.onstart = () => {
+    callbacks.onStart?.();
   };
 
   recognition.onresult = (event) => {

@@ -2,7 +2,6 @@ import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import type { InputPath, RecordRow, ReminderSchedule } from "../lib/types";
 import { todayKst } from "../lib/kst";
 import {
-  intervalDaysFromSchedule,
   normalizeSchedule,
   scheduleFromIntervalDays,
 } from "../recognition/intervals";
@@ -17,21 +16,24 @@ interface LastlyDb extends DBSchema {
 
 let dbPromise: Promise<IDBPDatabase<LastlyDb>> | null = null;
 
-/** v1/v2 row를 schedule 기준으로 정규화 */
-export function normalizeRow(
-  raw: Partial<RecordRow> &
-    Pick<
-      RecordRow,
-      | "actionKey"
-      | "actionLabel"
-      | "lastPerformedOn"
-      | "lastUtterance"
-      | "inputPath"
-      | "updatedAt"
-    >,
-): RecordRow {
+/** IndexedDB에 남아 있을 수 있는 구버전 필드 */
+type StoredRecord = Partial<RecordRow> &
+  Pick<
+    RecordRow,
+    | "actionKey"
+    | "actionLabel"
+    | "lastPerformedOn"
+    | "lastUtterance"
+    | "inputPath"
+    | "updatedAt"
+  > & {
+    intervalDays?: number | null;
+  };
+
+/** 저장 행을 현재 스키마로 맞춤. intervalDays는 읽기 이관만 */
+export function normalizeRow(raw: StoredRecord): RecordRow {
   const schedule = normalizeSchedule(
-    raw.schedule ?? scheduleFromIntervalDays(raw.intervalDays ?? null),
+    raw.schedule ?? scheduleFromIntervalDays(raw.intervalDays),
   );
   return {
     actionKey: raw.actionKey,
@@ -40,7 +42,6 @@ export function normalizeRow(
     lastUtterance: raw.lastUtterance,
     inputPath: raw.inputPath,
     schedule,
-    intervalDays: intervalDaysFromSchedule(schedule),
     updatedAt: raw.updatedAt,
   };
 }
@@ -55,7 +56,7 @@ function db() {
           });
           store.createIndex("updatedAt", "updatedAt");
         }
-        // v2: intervalDays, v3: schedule — 읽기 시 normalizeRow
+        // v3: schedule. 예전 intervalDays는 normalizeRow에서 이관
       },
     });
   }
@@ -71,22 +72,14 @@ export async function upsertRecord(input: {
   lastPerformedOn: string;
   lastUtterance: string;
   inputPath: InputPath;
-  intervalDays?: number | null;
   schedule?: ReminderSchedule | null;
 }): Promise<RecordRow> {
   const database = await db();
   const actionKey = normalizeActionKey(input.actionLabel);
   const previous = await database.get("records", actionKey);
   const prev = previous ? normalizeRow(previous) : null;
-
-  let schedule: ReminderSchedule | null;
-  if (input.schedule !== undefined) {
-    schedule = input.schedule;
-  } else if (input.intervalDays !== undefined) {
-    schedule = scheduleFromIntervalDays(input.intervalDays);
-  } else {
-    schedule = prev?.schedule ?? null;
-  }
+  const schedule =
+    input.schedule !== undefined ? input.schedule : (prev?.schedule ?? null);
 
   const row: RecordRow = {
     actionKey,
@@ -95,7 +88,6 @@ export async function upsertRecord(input: {
     lastUtterance: input.lastUtterance,
     inputPath: input.inputPath,
     schedule,
-    intervalDays: intervalDaysFromSchedule(schedule),
     updatedAt: new Date().toISOString(),
   };
   await database.put("records", row);
@@ -107,22 +99,14 @@ export async function updateRecord(input: {
   previousKey: string;
   actionLabel: string;
   lastPerformedOn: string;
-  intervalDays?: number | null;
   schedule?: ReminderSchedule | null;
 }): Promise<RecordRow> {
   const database = await db();
   const previous = await database.get("records", input.previousKey);
   const prev = previous ? normalizeRow(previous) : null;
   const nextKey = normalizeActionKey(input.actionLabel);
-
-  let schedule: ReminderSchedule | null;
-  if (input.schedule !== undefined) {
-    schedule = input.schedule;
-  } else if (input.intervalDays !== undefined) {
-    schedule = scheduleFromIntervalDays(input.intervalDays);
-  } else {
-    schedule = prev?.schedule ?? null;
-  }
+  const schedule =
+    input.schedule !== undefined ? input.schedule : (prev?.schedule ?? null);
 
   const row: RecordRow = {
     actionKey: nextKey,
@@ -131,7 +115,6 @@ export async function updateRecord(input: {
     lastUtterance: prev?.lastUtterance ?? input.actionLabel.trim(),
     inputPath: prev?.inputPath ?? "manual",
     schedule,
-    intervalDays: intervalDaysFromSchedule(schedule),
     updatedAt: new Date().toISOString(),
   };
   await database.put("records", row);
@@ -165,9 +148,4 @@ export function isValidPerformedOn(value: string): boolean {
     probe.getUTCMonth() === m - 1 &&
     probe.getUTCDate() === d
   );
-}
-
-export function isValidIntervalDays(value: number | null): boolean {
-  if (value === null) return true;
-  return Number.isInteger(value) && value >= 1 && value <= 365;
 }

@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { formatKoreanDate, shiftKstDate, todayKst } from "../lib/kst";
 import { formatSpeakDate } from "../recognition/voice";
 
@@ -33,6 +34,7 @@ export default function DateField({ value, onChange }: Props) {
   const selected = parseIso(value || today);
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState({ y: selected.y, m: selected.m });
+  const hostRef = useRef<Element | null>(null);
 
   const cells = useMemo(() => {
     const total = daysInMonth(cursor.y, cursor.m);
@@ -44,12 +46,13 @@ export default function DateField({ value, onChange }: Props) {
       const iso = toIso(cursor.y, cursor.m, day);
       list.push({ iso, day, outside: iso > today });
     }
-    while (list.length % 7 !== 0) list.push(null);
+    while (list.length < 42) list.push(null);
     return list;
   }, [cursor, today]);
 
   const openCalendar = () => {
     const base = parseIso(value || today);
+    hostRef.current = document.querySelector(".screen") ?? document.body;
     setCursor({ y: base.y, m: base.m });
     setOpen(true);
   };
@@ -78,7 +81,9 @@ export default function DateField({ value, onChange }: Props) {
         <span className="date-shell-hint">변경</span>
       </button>
 
-      {open && (
+      {open &&
+        hostRef.current &&
+        createPortal(
         <div className="cal-scrim" onClick={() => setOpen(false)}>
           <div
             className="cal-panel"
@@ -164,7 +169,8 @@ export default function DateField({ value, onChange }: Props) {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        hostRef.current,
       )}
     </div>
   );

@@ -33,8 +33,6 @@ export type ParseResult = {
   utteranceType: UtteranceType;
   action: string | null;
   date: string | null;
-  /** @deprecated schedule 우선. everyDays일 때만 채움 */
-  intervalDays: number | null;
   schedule: ReminderSchedule | null;
   confidence: number | null;
   confidenceSource: ConfidenceSource;
@@ -48,8 +46,6 @@ export type RecordRow = {
   lastPerformedOn: string;
   lastUtterance: string;
   inputPath: InputPath;
-  /** @deprecated schedule 우선 */
-  intervalDays: number | null;
   schedule: ReminderSchedule | null;
   updatedAt: string;
 };

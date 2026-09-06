@@ -9,7 +9,6 @@ const row = (label: string, date: string, interval: number | null = null): Recor
   lastPerformedOn: date,
   lastUtterance: label,
   inputPath: "voice",
-  intervalDays: interval,
   schedule: interval != null ? { kind: "everyDays", days: interval } : null,
   updatedAt: "2026-09-06T00:00:00.000Z",
 });

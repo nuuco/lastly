@@ -3,13 +3,9 @@ import { isOverdue } from "../lib/kst";
 
 const ASKED_KEY = "lastly.notifyAsked";
 
-function rowSchedule(row: RecordRow): ReminderSchedule | number | null {
-  return row.schedule ?? row.intervalDays ?? null;
-}
-
 export function listOverdue(rows: RecordRow[], now = new Date()): RecordRow[] {
   return rows.filter((row) =>
-    isOverdue(row.lastPerformedOn, rowSchedule(row), now),
+    isOverdue(row.lastPerformedOn, row.schedule, now),
   );
 }
 
@@ -18,8 +14,8 @@ export function sortRecordsForList(
   now = new Date(),
 ): RecordRow[] {
   return [...rows].sort((a, b) => {
-    const aDue = isOverdue(a.lastPerformedOn, rowSchedule(a), now) ? 0 : 1;
-    const bDue = isOverdue(b.lastPerformedOn, rowSchedule(b), now) ? 0 : 1;
+    const aDue = isOverdue(a.lastPerformedOn, a.schedule, now) ? 0 : 1;
+    const bDue = isOverdue(b.lastPerformedOn, b.schedule, now) ? 0 : 1;
     if (aDue !== bDue) return aDue - bDue;
     return b.updatedAt.localeCompare(a.updatedAt);
   });
@@ -67,7 +63,7 @@ export function notifyOverdue(rows: RecordRow[]): void {
   const title =
     due.length === 1
       ? `${due[0].actionLabel} 알림`
-      : `챙길 일 ${due.length}건`;
+      : `주기가 지난 일 ${due.length}건`;
   const body =
     due.length === 1
       ? "주기가 지났어요. 오늘 하셨다면 기록해 주세요."
@@ -86,5 +82,5 @@ export function overdueSummary(rows: RecordRow[]): string | null {
   const due = listOverdue(rows);
   if (due.length === 0) return null;
   if (due.length === 1) return `${due[0].actionLabel} 주기가 지났어요`;
-  return `챙길 일 ${due.length}건이 있어요`;
+  return `주기가 지난 일 ${due.length}건 · 눌러 보기`;
 }

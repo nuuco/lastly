@@ -13,6 +13,7 @@ import {
   todayKst,
 } from "../lib/kst";
 import {
+  listOverdue,
   maybeAskNotificationOnInterval,
   notifyOverdue,
   overdueSummary,
@@ -84,6 +85,7 @@ type Phase =
   | "editing"
   | "answer"
   | "dayList"
+  | "dueList"
   | "saved";
 
 /** live = 브라우저 받아쓰기, whisper = 녹음 후 Whisper */
@@ -148,6 +150,7 @@ export default function HomePage() {
   const [dayPerformed, setDayPerformed] = useState<RecordRow[]>([]);
   const [dayDue, setDayDue] = useState<RecordRow[]>([]);
   const [banner, setBanner] = useState("");
+  const [bannerRows, setBannerRows] = useState<RecordRow[]>([]);
   const [voiceLevel, setVoiceLevel] = useState(0);
   const [debug, setDebug] = useState<RecognitionDebug>({
     webgpu: false,
@@ -184,9 +187,11 @@ export default function HomePage() {
 
   useEffect(() => {
     void reload().then((next) => {
+      const due = listOverdue(next);
       const summary = overdueSummary(next);
-      if (summary) {
+      if (summary && due.length > 0) {
         setBanner(summary);
+        setBannerRows(due);
         notifyOverdue(next);
       }
     });
@@ -283,6 +288,7 @@ export default function HomePage() {
       phase !== "idle" &&
       phase !== "editing" &&
       phase !== "dayList" &&
+      phase !== "dueList" &&
       phase !== "answer"
     ) {
       return;
@@ -602,6 +608,32 @@ export default function HomePage() {
     levelSourceRef.current = "speech";
     setVoiceLevel(0);
 
+    let recorderStarted = false;
+    const startFallbackRecorder = () => {
+      // 받아쓰기 start와 동시에 getUserMedia를 열면 Safari 권한 창이 두 번 뜬다.
+      // onstart(허용 이후)에만 병행 녹음한다.
+      if (!canRecordWhileDictating() || recorderStarted || recorderRef.current) {
+        return;
+      }
+      recorderStarted = true;
+      void startRecorder({
+        silenceMs: DEFAULT_SILENCE_MS,
+        onLevel: onMicLevel,
+        onAutoStop: () => void finishVoice(),
+      })
+        .then((rec) => {
+          if (captureModeRef.current !== "live" || liveRef.current !== handle) {
+            void rec.stop();
+            return;
+          }
+          levelSourceRef.current = "mic";
+          recorderRef.current = rec;
+        })
+        .catch(() => {
+          recorderStarted = false;
+        });
+    };
+
     const handle = createSpeechRecognition({
       onResult: (finalText, interimText) => {
         const combined = `${finalText}${interimText}`;
@@ -611,6 +643,7 @@ export default function HomePage() {
         setLiveInterim(interimText);
         if (combined.trim()) bumpSpeechLevel();
       },
+      onStart: startFallbackRecorder,
       onError: (kind) => {
         liveRef.current?.abort();
         liveRef.current = null;
@@ -631,24 +664,6 @@ export default function HomePage() {
     liveRef.current = handle;
     handle.start();
     armSilenceWatch();
-
-    // Safari 등: 병행 녹음 가능하면 같은 스트림으로 음량+폴백. Chrome은 병행 금지.
-    if (canRecordWhileDictating()) {
-      void startRecorder({
-        silenceMs: DEFAULT_SILENCE_MS,
-        onLevel: onMicLevel,
-        onAutoStop: () => void finishVoice(),
-      })
-        .then((rec) => {
-          if (captureModeRef.current !== "live" || liveRef.current !== handle) {
-            void rec.stop();
-            return;
-          }
-          levelSourceRef.current = "mic";
-          recorderRef.current = rec;
-        })
-        .catch(() => undefined);
-    }
   };
 
   const toggleRecord = () => {
@@ -662,6 +677,7 @@ export default function HomePage() {
     setLiveInterim("");
     setParse(null);
     setStatus("");
+    setListeningYesNo(false);
     setVoiceLevel(0);
     levelSourceRef.current = "none";
     liveTextRef.current = "";
@@ -693,7 +709,8 @@ export default function HomePage() {
     phase === "rejected" ||
     phase === "editing" ||
     phase === "answer" ||
-    phase === "dayList";
+    phase === "dayList" ||
+    phase === "dueList";
 
   const sortedRows = sortRecordsForList(rows);
 
@@ -720,12 +737,28 @@ export default function HomePage() {
 
       {banner ? (
         <div className="due-banner">
-          <span>{banner}</span>
+          <button
+            type="button"
+            className="due-banner-main"
+            onClick={() => {
+              if (bannerRows.length === 0) return;
+              if (bannerRows.length === 1) {
+                openEdit(bannerRows[0]);
+                return;
+              }
+              setPhase("dueList");
+            }}
+          >
+            <span>{banner}</span>
+          </button>
           <button
             type="button"
             className="toast-x"
             aria-label="닫기"
-            onClick={() => setBanner("")}
+            onClick={() => {
+              setBanner("");
+              setBannerRows([]);
+            }}
           >
             ×
           </button>
@@ -744,13 +777,10 @@ export default function HomePage() {
             ) : (
               sortedRows.map((row) => {
                 const elapsed = daysSince(row.lastPerformedOn);
-                const due = isOverdue(
-                  row.lastPerformedOn,
-                  row.schedule ?? row.intervalDays,
-                );
+                const due = isOverdue(row.lastPerformedOn, row.schedule);
                 const progress = scheduleProgress(
                   row.lastPerformedOn,
-                  row.schedule ?? row.intervalDays,
+                  row.schedule,
                 );
                 return (
                   <article
@@ -816,8 +846,15 @@ export default function HomePage() {
       </div>
 
       <div className="composer">
+        {textMode ? (
+          <div className="composer-view-slot">
+            <ViewToggle mode={viewMode} onChange={changeView} />
+          </div>
+        ) : null}
         <div className={`composer-row${textMode ? " text" : ""}`}>
-          <ViewToggle mode={viewMode} onChange={changeView} />
+          {!textMode ? (
+            <ViewToggle mode={viewMode} onChange={changeView} />
+          ) : null}
           {!textMode ? (
             <button
               type="button"
@@ -957,6 +994,7 @@ export default function HomePage() {
                   <DateField value={editDate} onChange={setEditDate} />
                   <IntervalChips
                     value={editSchedule}
+                    anchorDate={editDate}
                     onChange={(next) => {
                       setEditSchedule(next);
                       editScheduleRef.current = next;
@@ -1103,6 +1141,36 @@ export default function HomePage() {
               </div>
             )}
 
+            {phase === "dueList" && (
+              <div className="result">
+                <div className="eyebrow">주기가 지난 일</div>
+                <p className="reason">
+                  {bannerRows.length}건이에요. 골라서 기록하거나 수정하세요.
+                </p>
+                <div className="candidate-list">
+                  {bannerRows.map((row) => {
+                    const elapsed = daysSince(row.lastPerformedOn);
+                    return (
+                      <button
+                        key={row.actionKey}
+                        type="button"
+                        className="candidate candidate-due"
+                        onClick={() => openEdit(row)}
+                      >
+                        {row.actionLabel}
+                        <span>
+                          {elapsed === 0 ? "오늘" : `${elapsed}일 전`}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <button type="button" className="ghost" onClick={closeSheet}>
+                  닫기
+                </button>
+              </div>
+            )}
+
             {phase === "rejected" && (
               <div className="result">
                 <div className="eyebrow">이렇게 들었어요</div>
@@ -1124,6 +1192,7 @@ export default function HomePage() {
                     <DateField value={editDate} onChange={setEditDate} />
                     <IntervalChips
                       value={editSchedule}
+                      anchorDate={editDate}
                       onChange={(next) => {
                         setEditSchedule(next);
                         editScheduleRef.current = next;
@@ -1149,7 +1218,11 @@ export default function HomePage() {
                     이대로 기록할게요
                   </button>
                 )}
-                <button type="button" className="ghost" onClick={closeSheet}>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => void toggleRecord()}
+                >
                   다시 말하기
                 </button>
                 <RecognitionNote debug={debug} />
@@ -1179,6 +1252,7 @@ export default function HomePage() {
                   ) : null}
                   <IntervalChips
                     value={editSchedule}
+                    anchorDate={editDate}
                     onChange={(next) => {
                       setEditSchedule(next);
                       editScheduleRef.current = next;
