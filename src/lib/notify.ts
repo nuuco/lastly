@@ -42,6 +42,27 @@ export function listLateOrSoon(
   return out;
 }
 
+/** 알림함 대상: 지남 + 오늘이 예정일인 것만 (D-1~D-3 곧은 제외) */
+export function listInboxTargets(
+  rows: RecordRow[],
+  now = new Date(),
+): Array<RecordRow & { dueOn: string }> {
+  const out: Array<RecordRow & { dueOn: string }> = [];
+  for (const row of rows) {
+    const info = dueInfo(
+      row.lastPerformedOn,
+      row.schedule,
+      row.snoozeUntil,
+      now,
+    );
+    if (!info) continue;
+    if (info.kind === "late" || info.daysToDue === 0) {
+      out.push({ ...row, dueOn: info.dueOn });
+    }
+  }
+  return out;
+}
+
 export function sortRecordsForList(rows: RecordRow[]): RecordRow[] {
   return [...rows].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
@@ -89,11 +110,11 @@ export function notifyLateOrSoon(
   const title =
     rows.length === 1
       ? `${rows[0].actionLabel} 알림`
-      : `지난·곧인 일 ${rows.length}건`;
+      : `지남·오늘 예정 ${rows.length}건`;
   const body =
     rows.length === 1
       ? rows[0].memo?.trim() ||
-        "주기가 지났거나 다가왔어요. 하셨다면 기록해 주세요."
+        "주기가 지났거나 오늘이에요. 하셨다면 기록해 주세요."
       : rows
           .slice(0, 3)
           .map((r) => r.actionLabel)
@@ -118,7 +139,7 @@ export function overdueSummary(rows: RecordRow[]): string | null {
 }
 
 /**
- * 앱 오픈 시: 설정·주말·시각을 보고 지남·곧을 알림함에 넣고 OS 알림.
+ * 앱 오픈 시: 설정·주말·시각을 보고 지남·오늘 예정만 알림함에 넣고 OS 알림.
  * 하루 한 번만 OS 알림(digest).
  */
 export async function syncInboxOnOpen(
@@ -130,7 +151,7 @@ export async function syncInboxOnOpen(
     return { created: 0, notified: false };
   }
 
-  const targets = listLateOrSoon(rows, now);
+  const targets = listInboxTargets(rows, now);
   let created = 0;
   for (const row of targets) {
     const before = await listOpenInbox();

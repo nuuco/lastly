@@ -75,6 +75,7 @@ import {
   isValidPerformedOn,
   listOpenInbox,
   listRecords,
+  markInboxByAction,
   matchesSearch,
   normalizeActionKey,
   seedDemoIfEmpty,
@@ -387,10 +388,13 @@ export default function HomePage() {
       memo: row.memo,
       snoozeUntil: null,
     });
+    await markInboxByAction(editingKey, "done");
     setEditingKey(null);
     setQuickOtherDate(false);
     setPhase("idle");
     await reload();
+    const open = await listOpenInbox();
+    setUnreadCount(open.filter((i) => !i.read).length);
     showToast(isoDate === todayKst() ? "오늘로 기록했어요" : "기록했어요");
   };
 
@@ -433,12 +437,15 @@ export default function HomePage() {
       aliasToAdd: aliasToAddRef.current,
       clearSnooze: true,
     });
+    await markInboxByAction(normalizeActionKey(action), "done");
     aliasToAddRef.current = null;
     setEditAction(action);
     setEditDate(date);
     setPhase("saved");
     setListeningYesNo(false);
     await reload();
+    const open = await listOpenInbox();
+    setUnreadCount(open.filter((i) => !i.read).length);
     showToast("기록했어요");
     if (speakResult) await speak(savedPhrase());
     setPhase("idle");

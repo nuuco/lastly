@@ -51,7 +51,7 @@ export type RecordRow = {
   aliases: string[];
   /** 목록·알림 부제. 빈 문자열 허용 */
   memo: string;
-  /** 쉬어가기. 그날까지 지남/곧·알림함에서 뺌 */
+  /** 쉬어가기. 그날까지 지남·오늘예정·알림함에서 뺌 */
   snoozeUntil: string | null;
   updatedAt: string;
 };

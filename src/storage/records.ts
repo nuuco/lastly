@@ -192,6 +192,7 @@ export async function updateRecord(input: {
 export async function deleteRecord(actionKey: string): Promise<void> {
   const database = await db();
   await database.delete("records", actionKey);
+  await markInboxByAction(actionKey, "done");
 }
 
 export async function listRecords(): Promise<RecordRow[]> {

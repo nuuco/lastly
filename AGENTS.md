@@ -110,3 +110,8 @@
 - 기록 갱신·알림함 액션: 풀페이지 되돌림 → 바텀시트 유지
 - README: 제품 소개·실행·흐름·문서 링크 작성
 - README: 배포 링크(lastly-lilac.vercel.app) 추가
+- 알림함: 지남+오늘 예정만 적재, 홈·음성 갱신 시 해당 알림 닫기
+- 문서: PRD·MVP-SPEC·README에 알림함 규칙 동기화
+- 호버: 포인트 색 투명도 0.08 → 0.04로 연하게
+- README: WebGPU·Whisper/LFM 구조와 모델 선택 이유 추가
+- README 온디바이스 AI: 코드 대조(Web Speech·Chrome 폴백·슬롯 병합) 반영

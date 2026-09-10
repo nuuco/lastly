@@ -14,7 +14,7 @@
   --font-b: "IBM Plex Sans KR", system-ui, sans-serif;
   --danger: #d14a3c;
   --ok: #0b8f6a;
-  --hover: rgba(16, 185, 129, 0.08);
+  --hover: rgba(16, 185, 129, 0.04);
 }
 
 * {
