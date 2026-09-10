@@ -20,7 +20,11 @@
 
 ---
 
-## 실행
+## 실행 · 배포
+
+**배포:** [https://lastly-lilac.vercel.app/](https://lastly-lilac.vercel.app/)
+
+로컬:
 
 ```bash
 npm install
@@ -36,7 +40,7 @@ npm run build
 ```
 
 **개발·실시간 받아쓰기:** Safari 기준  
-**Chromium:** Web Speech가 불안정하면 Whisper(로컬)로 폴백
+**Chrome(데스크톱):** Web Speech가 잘 안 되는 경우가 많아, 지금은 Safari로 개발·데모하는 편입니다. Chromium은 Whisper 폴백을 둡니다.
 
 마이크·알림 권한은 브라우저가 요청합니다. HTTPS 또는 localhost가 필요합니다.
 
