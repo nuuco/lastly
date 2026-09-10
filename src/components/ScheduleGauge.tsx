@@ -5,18 +5,17 @@ import type { ReminderSchedule } from "../lib/types";
 type Props = {
   progress: ScheduleProgress;
   schedule: ReminderSchedule | null;
+  /** 마지막 수행 후 경과일 */
+  elapsed: number;
 };
 
-function nextLabel(progress: ScheduleProgress): string {
-  if (progress.status === "due") {
-    if (progress.daysLeft < 0) return `${Math.abs(progress.daysLeft)}일 지남`;
-    return "오늘이 관리일";
-  }
-  return `다음 관리 D-${progress.daysLeft}`;
+function lastLabel(elapsed: number): string {
+  return elapsed === 0 ? "마지막 오늘" : `마지막 ${elapsed}일 전`;
 }
 
-export default function ScheduleGauge({ progress, schedule }: Props) {
+export default function ScheduleGauge({ progress, schedule, elapsed }: Props) {
   const due = progress.status === "due";
+  const scheduleText = formatScheduleLabel(schedule);
   return (
     <div className="gauge">
       <div className="track">
@@ -26,8 +25,8 @@ export default function ScheduleGauge({ progress, schedule }: Props) {
         />
       </div>
       <div className="meta">
-        <b>{formatScheduleLabel(schedule)}</b>
-        <span className={due ? "due-text" : undefined}>{nextLabel(progress)}</span>
+        <span className={due ? "due-text" : undefined}>{lastLabel(elapsed)}</span>
+        {scheduleText ? <b>{scheduleText}</b> : null}
       </div>
     </div>
   );

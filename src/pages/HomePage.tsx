@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import DateField from "../components/DateField";
 import IntervalChips from "../components/IntervalChips";
 import MonthCalendar, { type DayPick } from "../components/MonthCalendar";
@@ -7,24 +8,24 @@ import ViewToggle from "../components/ViewToggle";
 import VoiceWave from "../components/VoiceWave";
 import {
   daysSince,
+  dueInfo,
   formatKoreanDate,
-  isOverdue,
   scheduleProgress,
   todayKst,
 } from "../lib/kst";
 import {
-  listOverdue,
   maybeAskNotificationOnInterval,
-  notifyOverdue,
-  overdueSummary,
   sortRecordsForList,
+  syncInboxOnOpen,
 } from "../lib/notify";
 import type {
+  DueKind,
   InputPath,
   ParseResult,
   RecognitionDebug,
   RecordRow,
   ReminderSchedule,
+  StatusFilter,
   UtteranceType,
   ViewMode,
 } from "../lib/types";
@@ -72,8 +73,11 @@ import {
 import {
   deleteRecord,
   isValidPerformedOn,
+  listOpenInbox,
   listRecords,
+  matchesSearch,
   normalizeActionKey,
+  seedDemoIfEmpty,
   updateRecord,
   upsertRecord,
 } from "../storage/records";
@@ -83,13 +87,14 @@ type Phase =
   | "recording"
   | "transcribing"
   | "thinking"
+  | "composeText"
   | "confirm"
   | "match"
   | "rejected"
+  | "quick"
   | "editing"
   | "answer"
   | "dayList"
-  | "dueList"
   | "saved";
 
 /** live = 브라우저 받아쓰기, whisper = 녹음 후 Whisper */
@@ -126,9 +131,17 @@ function loadViewMode(): ViewMode {
   }
 }
 
+function countByDueKind(rows: RecordRow[]): Record<DueKind, number> {
+  const counts: Record<DueKind, number> = { late: 0, soon: 0, ok: 0 };
+  for (const row of rows) {
+    const info = dueInfo(row.lastPerformedOn, row.schedule, row.snoozeUntil);
+    if (info) counts[info.kind] += 1;
+  }
+  return counts;
+}
+
 export default function HomePage() {
   const [phase, setPhase] = useState<Phase>("idle");
-  const [textMode, setTextMode] = useState(false);
   const [text, setText] = useState("");
   const [status, setStatus] = useState("");
   const [rows, setRows] = useState<RecordRow[]>([]);
@@ -139,14 +152,18 @@ export default function HomePage() {
   const [editSchedule, setEditSchedule] = useState<ReminderSchedule | null>(
     null,
   );
+  const [editMemo, setEditMemo] = useState("");
   const [source, setSource] = useState<InputPath>("voice");
   const [listeningYesNo, setListeningYesNo] = useState(false);
   const [liveInterim, setLiveInterim] = useState("");
-  const [captureMode, setCaptureMode] = useState<CaptureMode>("live");
   const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [quickOtherDate, setQuickOtherDate] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<RecordRow | null>(null);
   const [toast, setToast] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>(loadViewMode);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [unreadCount, setUnreadCount] = useState(0);
   const [answerText, setAnswerText] = useState("");
   const [answerRow, setAnswerRow] = useState<RecordRow | null>(null);
   const [answerCandidates, setAnswerCandidates] = useState<RecordRow[]>([]);
@@ -157,8 +174,6 @@ export default function HomePage() {
   const [dayIso, setDayIso] = useState<string | null>(null);
   const [dayPerformed, setDayPerformed] = useState<RecordRow[]>([]);
   const [dayDue, setDayDue] = useState<RecordRow[]>([]);
-  const [banner, setBanner] = useState("");
-  const [bannerRows, setBannerRows] = useState<RecordRow[]>([]);
   const [voiceLevel, setVoiceLevel] = useState(0);
   const [debug, setDebug] = useState<RecognitionDebug>({
     webgpu: false,
@@ -195,15 +210,13 @@ export default function HomePage() {
   };
 
   useEffect(() => {
-    void reload().then((next) => {
-      const due = listOverdue(next);
-      const summary = overdueSummary(next);
-      if (summary && due.length > 0) {
-        setBanner(summary);
-        setBannerRows(due);
-        notifyOverdue(next);
-      }
-    });
+    void (async () => {
+      await seedDemoIfEmpty();
+      const next = await reload();
+      await syncInboxOnOpen(next);
+      const open = await listOpenInbox();
+      setUnreadCount(open.filter((i) => !i.read).length);
+    })();
     void hasWebGpu().then((webgpu) =>
       setDebug((prev) => ({ ...prev, webgpu })),
     );
@@ -276,9 +289,9 @@ export default function HomePage() {
     setPhase("idle");
     setParse(null);
     setLiveInterim("");
-    setCaptureMode("live");
     captureModeRef.current = "live";
     setEditingKey(null);
+    setQuickOtherDate(false);
     setListeningYesNo(false);
     setStatus("");
     setAnswerText("");
@@ -292,17 +305,19 @@ export default function HomePage() {
     setDayIso(null);
     setDayPerformed([]);
     setDayDue([]);
+    setEditMemo("");
+    setText("");
     prevScheduleRef.current = null;
     levelSourceRef.current = "none";
     setVoiceLevel(0);
   };
 
-  const openEdit = (row: RecordRow) => {
+  const openQuick = (row: RecordRow) => {
     if (
       phase !== "idle" &&
+      phase !== "quick" &&
       phase !== "editing" &&
       phase !== "dayList" &&
-      phase !== "dueList" &&
       phase !== "answer"
     ) {
       return;
@@ -311,7 +326,33 @@ export default function HomePage() {
     setEditAction(row.actionLabel);
     setEditDate(row.lastPerformedOn);
     setEditSchedule(row.schedule ?? null);
+    setEditMemo(row.memo ?? "");
     prevScheduleRef.current = row.schedule ?? null;
+    setQuickOtherDate(false);
+    setPhase("quick");
+  };
+
+  const openEdit = (row?: RecordRow) => {
+    const key = row?.actionKey ?? editingKey;
+    const sourceRow =
+      row ?? (key ? rows.find((r) => r.actionKey === key) : undefined);
+    if (!sourceRow) return;
+    if (
+      phase !== "idle" &&
+      phase !== "quick" &&
+      phase !== "editing" &&
+      phase !== "dayList" &&
+      phase !== "answer"
+    ) {
+      return;
+    }
+    setEditingKey(sourceRow.actionKey);
+    setEditAction(sourceRow.actionLabel);
+    setEditDate(sourceRow.lastPerformedOn);
+    setEditSchedule(sourceRow.schedule ?? null);
+    setEditMemo(sourceRow.memo ?? "");
+    prevScheduleRef.current = sourceRow.schedule ?? null;
+    setQuickOtherDate(false);
     setPhase("editing");
   };
 
@@ -326,6 +367,7 @@ export default function HomePage() {
       actionLabel: editAction.trim(),
       lastPerformedOn: editDate,
       schedule: editSchedule,
+      memo: editMemo,
     });
     setEditingKey(null);
     setPhase("idle");
@@ -333,18 +375,27 @@ export default function HomePage() {
     showToast("수정했어요");
   };
 
-  const markDoneToday = async () => {
-    if (!editingKey || !actionOk) return;
+  const markDoneOn = async (isoDate: string) => {
+    if (!editingKey) return;
+    const row = rows.find((r) => r.actionKey === editingKey);
+    if (!row) return;
     await updateRecord({
       previousKey: editingKey,
-      actionLabel: editAction.trim(),
-      lastPerformedOn: todayKst(),
-      schedule: editSchedule,
+      actionLabel: row.actionLabel,
+      lastPerformedOn: isoDate,
+      schedule: row.schedule,
+      memo: row.memo,
+      snoozeUntil: null,
     });
     setEditingKey(null);
+    setQuickOtherDate(false);
     setPhase("idle");
     await reload();
-    showToast("오늘로 기록했어요");
+    showToast(isoDate === todayKst() ? "오늘로 기록했어요" : "기록했어요");
+  };
+
+  const markDoneToday = async () => {
+    await markDoneOn(todayKst());
   };
 
   const askDelete = (row: RecordRow) => {
@@ -380,6 +431,7 @@ export default function HomePage() {
       inputPath: path,
       schedule,
       aliasToAdd: aliasToAddRef.current,
+      clearSnooze: true,
     });
     aliasToAddRef.current = null;
     setEditAction(action);
@@ -653,9 +705,16 @@ export default function HomePage() {
       setStatus("말이 인식되지 않았어요.");
       setPhase("rejected");
       setParse(null);
+      setEditAction("");
+      setEditDate(todayKst());
+      setEditSchedule(null);
+      editScheduleRef.current = null;
+      setSpokenAction("");
       return;
     }
-    await runParse(spoken, "voice", extras);
+    setPhase("thinking");
+    setStatus("");
+    void runParse(spoken, "voice");
   };
 
   const finishVoice = async () => {
@@ -715,7 +774,6 @@ export default function HomePage() {
     liveRef.current = null;
     clearVoiceTimers();
     captureModeRef.current = "whisper";
-    setCaptureMode("whisper");
     setLiveInterim("");
     if (recorderRef.current) {
       setPhase("recording");
@@ -751,7 +809,6 @@ export default function HomePage() {
 
   const beginLiveDictation = () => {
     captureModeRef.current = "live";
-    setCaptureMode("live");
     setPhase("recording");
     setStatus("");
     levelSourceRef.current = "speech";
@@ -841,6 +898,19 @@ export default function HomePage() {
     beginLiveDictation();
   };
 
+  const openComposeText = () => {
+    setText("");
+    setStatus("");
+    setPhase("composeText");
+  };
+
+  const submitComposeText = () => {
+    const next = stripPrefix(text);
+    if (!next) return;
+    setText("");
+    void runParse(next, "text");
+  };
+
   const startManualFromQuery = () => {
     setEditAction(parse?.action ?? editAction);
     setEditDate(todayKst());
@@ -898,19 +968,31 @@ export default function HomePage() {
     void save(action, editDate, source, raw, source === "voice");
   };
 
+  const toggleStatusFilter = (kind: DueKind | "all") => {
+    if (kind === "all") {
+      setStatusFilter("all");
+      return;
+    }
+    setStatusFilter((prev) => (prev === kind ? "all" : kind));
+  };
+
   const overlayOpen =
     phase === "recording" ||
     phase === "transcribing" ||
     phase === "thinking" ||
-    phase === "confirm" ||
-    phase === "match" ||
-    phase === "rejected" ||
-    phase === "editing" ||
-    phase === "answer" ||
-    phase === "dayList" ||
-    phase === "dueList";
+    phase === "quick" ||
+    phase === "dayList";
 
   const sortedRows = sortRecordsForList(rows);
+  const dueCounts = countByDueKind(rows);
+  const filteredRows = sortedRows.filter((row) => {
+    if (!matchesSearch(row, searchQuery)) return false;
+    if (statusFilter === "all") return true;
+    const info = dueInfo(row.lastPerformedOn, row.schedule, row.snoozeUntil);
+    return info?.kind === statusFilter;
+  });
+  const forceList = searchQuery.trim().length > 0;
+  const showList = viewMode === "list" || forceList;
 
   const overlayClose = (
     <button
@@ -925,57 +1007,97 @@ export default function HomePage() {
 
   return (
     <div className="screen">
-      <div className="apphead">
-        <div className="brand">LASTLY</div>
-        <h1>말만 하면 챙겨드릴게요</h1>
-        <div className="sub">
-          한 일을 말하면 기억해요. 언제 했는지도 물어볼 수 있어요.
+      <div className="apphead row">
+        <div className="brand" aria-label="LASTLY">
+          LASTL<span className="brand-y">Y</span>
+        </div>
+        <div className="apphead-actions">
+          <Link to="/notifications" className="icon-btn" aria-label="알림">
+            <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 9a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9" />
+              <path d="M10 20a2 2 0 0 0 4 0" />
+            </svg>
+            {unreadCount > 0 ? <span className="badge-dot" /> : null}
+          </Link>
+          <Link to="/settings" className="icon-btn" aria-label="설정">
+            <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </Link>
         </div>
       </div>
 
-      {banner ? (
-        <div className="due-banner">
-          <button
-            type="button"
-            className="due-banner-main"
-            onClick={() => {
-              if (bannerRows.length === 0) return;
-              if (bannerRows.length === 1) {
-                openEdit(bannerRows[0]);
-                return;
-              }
-              setPhase("dueList");
-            }}
-          >
-            <span>{banner}</span>
-          </button>
-          <button
-            type="button"
-            className="toast-x"
-            aria-label="닫기"
-            onClick={() => {
-              setBanner("");
-              setBannerRows([]);
-            }}
-          >
-            ×
-          </button>
-        </div>
-      ) : null}
+      <div className="status-filters" role="tablist" aria-label="상태 필터">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={statusFilter === "all"}
+          className={`status-pill${statusFilter === "all" ? " on" : ""}`}
+          onClick={() => toggleStatusFilter("all")}
+        >
+          전체
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={statusFilter === "late"}
+          className={`status-pill late${statusFilter === "late" ? " on" : ""}`}
+          onClick={() => toggleStatusFilter("late")}
+        >
+          지남 <b>{dueCounts.late}</b>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={statusFilter === "soon"}
+          className={`status-pill soon${statusFilter === "soon" ? " on" : ""}`}
+          onClick={() => toggleStatusFilter("soon")}
+        >
+          곧 <b>{dueCounts.soon}</b>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={statusFilter === "ok"}
+          className={`status-pill ok${statusFilter === "ok" ? " on" : ""}`}
+          onClick={() => toggleStatusFilter("ok")}
+        >
+          여유 <b>{dueCounts.ok}</b>
+        </button>
+      </div>
 
       <div className="list">
-        {viewMode === "list" ? (
+        {showList ? (
           <>
-            {sortedRows.length === 0 ? (
+            <div className="search-field">
+              <input
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="제목·메모 검색"
+                aria-label="검색"
+              />
+            </div>
+            {filteredRows.length === 0 ? (
               <div className="empty">
-                아직 기록한 일이 없어요.
-                <br />
-                말해 남기거나, 언제 했는지 물어볼 수 있어요.
+                {rows.length === 0 ? (
+                  <>
+                    아직 기록한 일이 없어요.
+                    <br />
+                    말해 남기거나, 언제 했는지 물어볼 수 있어요.
+                  </>
+                ) : (
+                  "맞는 기록이 없어요."
+                )}
               </div>
             ) : (
-              sortedRows.map((row) => {
+              filteredRows.map((row) => {
                 const elapsed = daysSince(row.lastPerformedOn);
-                const due = isOverdue(row.lastPerformedOn, row.schedule);
+                const info = dueInfo(
+                  row.lastPerformedOn,
+                  row.schedule,
+                  row.snoozeUntil,
+                );
                 const progress = scheduleProgress(
                   row.lastPerformedOn,
                   row.schedule,
@@ -983,24 +1105,30 @@ export default function HomePage() {
                 return (
                   <article
                     key={row.actionKey}
-                    className={`card${due ? " due" : ""}`}
+                    className="card"
                     role="button"
                     tabIndex={0}
-                    onClick={() => openEdit(row)}
+                    onClick={() => openQuick(row)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
-                        openEdit(row);
+                        openQuick(row);
                       }
                     }}
                   >
                     <div className="card-top">
                       <div className="card-main">
-                        <div className="name">{row.actionLabel}</div>
-                        <div className="last">
-                          마지막 {elapsed === 0 ? "오늘" : `${elapsed}일 전`}
-                          {due ? " · 알림" : ""}
+                        <div className="card-title-row">
+                          <div className="name">{row.actionLabel}</div>
+                          {info ? (
+                            <span className={`dday ${info.kind}`}>
+                              {info.label}
+                            </span>
+                          ) : null}
                         </div>
+                        {row.memo ? (
+                          <div className="memo">{row.memo}</div>
+                        ) : null}
                       </div>
                       <button
                         type="button"
@@ -1008,7 +1136,7 @@ export default function HomePage() {
                         aria-label={`${row.actionLabel} 삭제`}
                         onClick={(event) => {
                           event.stopPropagation();
-                          void askDelete(row);
+                          askDelete(row);
                         }}
                       >
                         <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -1023,8 +1151,17 @@ export default function HomePage() {
                       <ScheduleGauge
                         progress={progress}
                         schedule={row.schedule}
+                        elapsed={elapsed}
                       />
-                    ) : null}
+                    ) : (
+                      <div className="card-foot">
+                        <span>
+                          {elapsed === 0
+                            ? "마지막 오늘"
+                            : `마지막 ${elapsed}일 전`}
+                        </span>
+                      </div>
+                    )}
                   </article>
                 );
               })
@@ -1044,84 +1181,35 @@ export default function HomePage() {
       </div>
 
       <div className="composer">
-        {textMode ? (
-          <div className="composer-view-slot">
-            <ViewToggle mode={viewMode} onChange={changeView} />
-          </div>
-        ) : null}
-        <div className={`composer-row${textMode ? " text" : ""}`}>
-          {!textMode ? (
-            <ViewToggle mode={viewMode} onChange={changeView} />
-          ) : null}
-          {!textMode ? (
-            <button
-              type="button"
-              className={`mic-btn${phase === "recording" ? " live" : ""}`}
-              onClick={() => void toggleRecord()}
-              aria-label="음성으로 기록하기"
-            >
-              <svg viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round">
-                <rect x="9" y="3" width="6" height="11" rx="3" />
-                <path d="M5 11a7 7 0 0 0 14 0" />
-                <line x1="12" y1="18" x2="12" y2="21" />
-              </svg>
-            </button>
-          ) : (
-            <form
-              className="text-field on"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const next = stripPrefix(text);
-                if (!next) return;
-                setText("");
-                setTextMode(false);
-                void runParse(next, "text");
-              }}
-            >
-              <button
-                type="button"
-                className="mode-switch in-field"
-                onClick={() => setTextMode(false)}
-                aria-label="말로 입력하기"
-              >
-                <svg viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round">
-                  <rect x="9" y="3" width="6" height="11" rx="3" />
-                  <path d="M5 11a7 7 0 0 0 14 0" />
-                  <line x1="12" y1="18" x2="12" y2="21" />
-                </svg>
-              </button>
-              <input
-                value={text}
-                onChange={(event) => setText(event.target.value)}
-                placeholder="기록하거나 언제 했는지 물어보세요"
-              />
-              <button type="submit" className="send" aria-label="보내기">
-                <svg viewBox="0 0 24 24" fill="none" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 19V5" />
-                  <path d="M5 12l7-7 7 7" />
-                </svg>
-              </button>
-            </form>
-          )}
-          {!textMode ? (
-            <button
-              type="button"
-              className="mode-switch"
-              onClick={() => setTextMode(true)}
-              aria-label="글로 입력하기"
-            >
-              <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="6" width="18" height="12" rx="2" />
-                <path d="M7 10h.01M10 10h.01M13 10h.01M16 10h.01M8 14h8" />
-              </svg>
-            </button>
-          ) : null}
+        <div className="composer-row">
+          <ViewToggle mode={viewMode} onChange={changeView} />
+          <button
+            type="button"
+            className={`mic-btn${phase === "recording" ? " live" : ""}`}
+            onClick={() => void toggleRecord()}
+            aria-label="음성으로 기록하기"
+          >
+            <svg viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round">
+              <rect x="9" y="3" width="6" height="11" rx="3" />
+              <path d="M5 11a7 7 0 0 0 14 0" />
+              <line x1="12" y1="18" x2="12" y2="21" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="mode-switch"
+            onClick={openComposeText}
+            aria-label="글로 입력하기"
+          >
+            <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="6" width="18" height="12" rx="2" />
+              <path d="M7 10h.01M10 10h.01M13 10h.01M16 10h.01M8 14h8" />
+            </svg>
+          </button>
         </div>
-        {!textMode ? (
-          <div className="mic-hint">
-            {phase === "recording" ? "다시 눌러 끝내기" : "눌러서 말하기"}
-          </div>
-        ) : null}
+        <div className="mic-hint">
+          {phase === "recording" ? "다시 눌러 끝내기" : "눌러서 말하기"}
+        </div>
       </div>
 
       {overlayOpen && (
@@ -1134,7 +1222,7 @@ export default function HomePage() {
               <div className="voice">
                 <div className="badge">
                   <span className="live-dot" />
-                  {captureMode === "whisper" ? "녹음 중" : "듣고 있어요"}
+                  듣고 있어요
                 </div>
                 <VoiceWave level={voiceLevel} />
                 <div className={`dictation${raw || liveInterim ? "" : " placeholder"}`}>
@@ -1145,14 +1233,10 @@ export default function HomePage() {
                       {liveInterim ? <span className="interim">{liveInterim}</span> : null}
                       <span className="cursor" />
                     </>
-                  ) : captureMode === "whisper" ? (
-                    "말씀하세요 · 끝내면 글로 바꿔요"
                   ) : (
                     "말씀하세요"
                   )}
                 </div>
-                <p className="sheet-tip">예: 오늘 이불 빨았어 · 설거지 언제 했어?</p>
-                {status ? <p className="muted">{status}</p> : null}
                 <button type="button" className="ghost" onClick={() => void toggleRecord()}>
                   말하기 끝내기
                 </button>
@@ -1173,248 +1257,6 @@ export default function HomePage() {
               </div>
             )}
 
-            {phase === "match" && (
-              <div className="result">
-                <div className="eyebrow">비슷한 기록이 있어요</div>
-                {raw ? <div className="quote">“{raw}”</div> : null}
-                {matchMode === "query" && matchRow ? (
-                  <>
-                    <p className="say confirm-ask">
-                      {queryMatchPhrase(matchRow.actionLabel)}
-                    </p>
-                    <div className="parsed">
-                      <div className="name">{matchRow.actionLabel}</div>
-                      <div className="last">
-                        {formatKoreanDate(matchRow.lastPerformedOn)} ·{" "}
-                        {daysSince(matchRow.lastPerformedOn) === 0
-                          ? "오늘"
-                          : `${daysSince(matchRow.lastPerformedOn)}일 전`}
-                      </div>
-                    </div>
-                    {listeningYesNo ? (
-                      <p className="muted listen-hint">응 · 아니</p>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="confirm"
-                      onClick={acceptQueryMatch}
-                    >
-                      맞아요
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={rejectQueryMatch}
-                    >
-                      아니에요
-                    </button>
-                  </>
-                ) : null}
-                {matchMode === "save" && matchRow ? (
-                  <>
-                    <p className="say confirm-ask">
-                      {continuePhrase(
-                        matchRow.actionLabel,
-                        editDate,
-                        editSchedule,
-                      )}
-                    </p>
-                    <div className="parsed">
-                      <label>기존 항목</label>
-                      <div className="name">{matchRow.actionLabel}</div>
-                      {spokenAction &&
-                      normalizeActionKey(spokenAction) !==
-                        normalizeActionKey(matchRow.actionLabel) ? (
-                        <p className="muted">
-                          “{spokenAction}”을 {matchRow.actionLabel}로 이어요
-                        </p>
-                      ) : null}
-                      <label>날짜</label>
-                      <DateField value={editDate} onChange={setEditDate} />
-                      <IntervalChips
-                        value={editSchedule}
-                        anchorDate={editDate}
-                        onChange={(next) => {
-                          setEditSchedule(next);
-                          editScheduleRef.current = next;
-                        }}
-                      />
-                    </div>
-                    {listeningYesNo ? (
-                      <p className="muted listen-hint">응 · 아니</p>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="confirm"
-                      onClick={acceptSaveLink}
-                    >
-                      이어서 기록
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={startNewInstead}
-                    >
-                      새로 기록
-                    </button>
-                  </>
-                ) : null}
-                {matchMode === "save" && !matchRow && matchCandidates.length > 0 ? (
-                  <>
-                    <p className="say">어떤 항목에 이을까요?</p>
-                    <div className="candidate-list">
-                      {matchCandidates.map((row) => (
-                        <button
-                          key={row.actionKey}
-                          type="button"
-                          className="candidate"
-                          onClick={() => linkCandidate(row)}
-                        >
-                          {row.actionLabel}
-                          <span>{formatKoreanDate(row.lastPerformedOn)}</span>
-                        </button>
-                      ))}
-                    </div>
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={startNewInstead}
-                    >
-                      새로 기록
-                    </button>
-                  </>
-                ) : null}
-                <button type="button" className="ghost" onClick={closeSheet}>
-                  닫기
-                </button>
-              </div>
-            )}
-
-            {phase === "confirm" && (
-              <div className="result">
-                <div className="eyebrow">이렇게 들었어요</div>
-                <div className="quote">“{raw}”</div>
-                <div className="parsed">
-                  {parse ? (
-                    <div>
-                      <span className="chip">{TYPE_LABEL[parse.utteranceType]}</span>
-                    </div>
-                  ) : null}
-                  <label>행동</label>
-                  <input
-                    value={editAction}
-                    onChange={(event) => setEditAction(event.target.value)}
-                  />
-                  {spokenAction &&
-                  normalizeActionKey(spokenAction) !==
-                    normalizeActionKey(editAction) ? (
-                    <p className="muted">
-                      “{spokenAction}”을 {editAction}로 이어서 기록합니다
-                    </p>
-                  ) : null}
-                  <label>날짜</label>
-                  <DateField value={editDate} onChange={setEditDate} />
-                  <IntervalChips
-                    value={editSchedule}
-                    anchorDate={editDate}
-                    onChange={(next) => {
-                      setEditSchedule(next);
-                      editScheduleRef.current = next;
-                    }}
-                  />
-                </div>
-                <p className="say confirm-ask">
-                  {confirmPhrase(editAction || "이 일", editDate, editSchedule)}
-                </p>
-                {listeningYesNo ? (
-                  <p className="muted listen-hint">
-                    응 · 아니 · 또는 “어제” / “시트 세탁”처럼 말해 주세요
-                  </p>
-                ) : null}
-                <button
-                  type="button"
-                  className="confirm"
-                  disabled={!editAction.trim()}
-                  onClick={() =>
-                    void save(
-                      editAction.trim(),
-                      editDate,
-                      source,
-                      raw,
-                      source === "voice",
-                    )
-                  }
-                >
-                  네, 기록할게요
-                </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => void cancelWithVoice(source === "voice")}
-                >
-                  취소
-                </button>
-                <RecognitionNote debug={debug} />
-              </div>
-            )}
-
-            {phase === "answer" && (
-              <div className="result">
-                <div className="eyebrow">조회 결과</div>
-                {raw ? <div className="quote">“{raw}”</div> : null}
-                <p className="say">{answerText}</p>
-                {answerRow ? (
-                  <div className="parsed">
-                    <div className="name">{answerRow.actionLabel}</div>
-                    <div className="last">
-                      {formatKoreanDate(answerRow.lastPerformedOn)} ·{" "}
-                      {daysSince(answerRow.lastPerformedOn) === 0
-                        ? "오늘"
-                        : `${daysSince(answerRow.lastPerformedOn)}일 전`}
-                    </div>
-                  </div>
-                ) : null}
-                {answerCandidates.length > 0 ? (
-                  <div className="candidate-list">
-                    {answerCandidates.map((row) => (
-                      <button
-                        key={row.actionKey}
-                        type="button"
-                        className="candidate"
-                        onClick={() =>
-                          void showAnswer(answerPhrase(row), source, row)
-                        }
-                      >
-                        {row.actionLabel}
-                        <span>{formatKoreanDate(row.lastPerformedOn)}</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-                {!answerRow && answerCandidates.length === 0 ? (
-                  <button
-                    type="button"
-                    className="confirm"
-                    onClick={startManualFromQuery}
-                  >
-                    지금 기록할게요
-                  </button>
-                ) : null}
-                {answerRow ? (
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => openEdit(answerRow)}
-                  >
-                    기록 수정
-                  </button>
-                ) : null}
-                <button type="button" className="ghost" onClick={closeSheet}>
-                  닫기
-                </button>
-              </div>
-            )}
-
             {phase === "dayList" && dayIso && (
               <div className="result">
                 <div className="eyebrow">{formatKoreanDate(dayIso)}</div>
@@ -1429,7 +1271,7 @@ export default function HomePage() {
                         key={`p-${row.actionKey}`}
                         type="button"
                         className="candidate"
-                        onClick={() => openEdit(row)}
+                        onClick={() => openQuick(row)}
                       >
                         {row.actionLabel}
                         <span>수행</span>
@@ -1445,7 +1287,7 @@ export default function HomePage() {
                         key={`d-${row.actionKey}`}
                         type="button"
                         className="candidate candidate-due"
-                        onClick={() => openEdit(row)}
+                        onClick={() => openQuick(row)}
                       >
                         {row.actionLabel}
                         <span>
@@ -1463,147 +1305,688 @@ export default function HomePage() {
               </div>
             )}
 
-            {phase === "dueList" && (
-              <div className="result">
-                <div className="eyebrow">주기가 지난 일</div>
-                <p className="reason">
-                  {bannerRows.length}건이에요. 골라서 기록하거나 수정하세요.
-                </p>
-                <div className="candidate-list">
-                  {bannerRows.map((row) => {
-                    const elapsed = daysSince(row.lastPerformedOn);
-                    return (
+            {phase === "quick" && editingKey && (() => {
+              const row = rows.find((r) => r.actionKey === editingKey);
+              if (!row) return null;
+              const info = dueInfo(
+                row.lastPerformedOn,
+                row.schedule,
+                row.snoozeUntil,
+              );
+              const since = daysSince(row.lastPerformedOn);
+              return (
+                <div className="result">
+                  {!quickOtherDate ? (
+                    <>
+                      <div className="eyebrow">기록 갱신</div>
+                      <div className="action-head">
+                        <div>
+                          <div className="action-title">{row.actionLabel}</div>
+                          {row.memo ? (
+                            <div className="action-memo">{row.memo}</div>
+                          ) : (
+                            <div className="action-sub">
+                              마지막{" "}
+                              {since === 0 ? "오늘" : `${since}일 전`}
+                            </div>
+                          )}
+                        </div>
+                        {info ? (
+                          <span className={`dday ${info.kind}`}>
+                            {info.label}
+                          </span>
+                        ) : null}
+                      </div>
                       <button
-                        key={row.actionKey}
                         type="button"
-                        className="candidate candidate-due"
-                        onClick={() => openEdit(row)}
+                        className="confirm"
+                        onClick={() => void markDoneToday()}
                       >
-                        {row.actionLabel}
-                        <span>
-                          {elapsed === 0 ? "오늘" : `${elapsed}일 전`}
-                        </span>
+                        오늘 했어요
                       </button>
-                    );
-                  })}
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => {
+                          setEditDate(todayKst());
+                          setQuickOtherDate(true);
+                        }}
+                      >
+                        다른 날 했어요
+                      </button>
+                      <div className="sheet-secondary">
+                        <button
+                          type="button"
+                          className="sheet-text-btn"
+                          onClick={() => openEdit(row)}
+                        >
+                          <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            strokeWidth="1.8"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden
+                          >
+                            <path d="M12 20h9" />
+                            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                          </svg>
+                          내용 수정
+                        </button>
+                        <button
+                          type="button"
+                          className="sheet-text-btn danger"
+                          onClick={() => askDelete(row)}
+                        >
+                          <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            strokeWidth="1.8"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden
+                          >
+                            <path d="M4 7h16" />
+                            <path d="M9 7V5h6v2" />
+                            <path d="M6 7l1 14h10l1-14" />
+                            <path d="M10 11v6M14 11v6" />
+                          </svg>
+                          삭제
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="eyebrow">언제 했어요?</div>
+                      <p className="reason">{row.actionLabel}</p>
+                      <DateField value={editDate} onChange={setEditDate} />
+                      {!isValidPerformedOn(editDate) ? (
+                        <p className="field-error">날짜 형식을 확인해 주세요</p>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="confirm"
+                        disabled={!isValidPerformedOn(editDate)}
+                        onClick={() => void markDoneOn(editDate)}
+                      >
+                        이 날짜로 기록
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => setQuickOtherDate(false)}
+                      >
+                        뒤로
+                      </button>
+                    </>
+                  )}
                 </div>
-                <button type="button" className="ghost" onClick={closeSheet}>
-                  닫기
-                </button>
-              </div>
-            )}
-
-            {phase === "rejected" && (
-              <div className="result">
-                <div className="eyebrow">이렇게 들었어요</div>
-                <div className="quote">{raw ? `“${raw}”` : "인식된 말이 없어요"}</div>
-                {parse && (
-                  <span className="chip warn">{TYPE_LABEL[parse.utteranceType]}</span>
-                )}
-                <p className="reason">
-                  {parse ? REJECT_COPY[parse.utteranceType] : status}
-                </p>
-                {raw && (
-                  <div className="parsed">
-                    <label>직접 고쳐 기록</label>
-                    <input
-                      value={editAction}
-                      onChange={(event) => setEditAction(event.target.value)}
-                    />
-                    <label>날짜</label>
-                    <DateField value={editDate} onChange={setEditDate} />
-                    <IntervalChips
-                      value={editSchedule}
-                      anchorDate={editDate}
-                      onChange={(next) => {
-                        setEditSchedule(next);
-                        editScheduleRef.current = next;
-                      }}
-                    />
-                  </div>
-                )}
-                {raw && (
-                  <button
-                    type="button"
-                    className="confirm"
-                    disabled={!editAction.trim()}
-                    onClick={() => {
-                      setPhase("confirm");
-                      if (source === "voice") {
-                        void askRecordConfirm(
-                          editAction.trim(),
-                          editDate,
-                          raw,
-                          source,
-                        );
-                      }
-                    }}
-                  >
-                    이대로 기록할게요
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => void toggleRecord()}
-                >
-                  다시 말하기
-                </button>
-                <RecognitionNote debug={debug} />
-              </div>
-            )}
-
-            {phase === "editing" && (
-              <div className="result">
-                <div className="eyebrow">기록 수정</div>
-                <div className="parsed">
-                  <label>행동</label>
-                  <div className="field-row">
-                    <input
-                      value={editAction}
-                      onChange={(event) => setEditAction(event.target.value)}
-                      placeholder="예: 이불 빨래"
-                    />
-                    {actionOk ? <span className="ok-mark">✓</span> : null}
-                  </div>
-                  {!actionOk ? (
-                    <p className="field-error">행동 이름을 입력해 주세요</p>
-                  ) : null}
-                  <label>마지막 수행일</label>
-                  <DateField value={editDate} onChange={setEditDate} />
-                  {!dateOk ? (
-                    <p className="field-error">날짜 형식을 확인해 주세요</p>
-                  ) : null}
-                  <IntervalChips
-                    value={editSchedule}
-                    anchorDate={editDate}
-                    onChange={(next) => {
-                      setEditSchedule(next);
-                      editScheduleRef.current = next;
-                    }}
-                  />
-                </div>
-                <button
-                  type="button"
-                  className="confirm"
-                  disabled={!actionOk || !dateOk}
-                  onClick={() => void saveEdit()}
-                >
-                  저장할게요
-                </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  disabled={!actionOk}
-                  onClick={() => void markDoneToday()}
-                >
-                  방금 했어요 · 오늘로 기록
-                </button>
-              </div>
-            )}
+              );
+            })()}
           </div>
         </div>
       )}
+
+      {phase === "answer" ? (
+        <div className="edit-screen">
+          <header className="subhead">
+            <button
+              type="button"
+              className="back-link"
+              aria-label="뒤로"
+              onClick={closeSheet}
+            >
+              ‹
+            </button>
+            <div className="subhead-title">조회 결과</div>
+            <button
+              type="button"
+              className="sheet-x edit-close"
+              aria-label="닫기"
+              onClick={closeSheet}
+            >
+              ×
+            </button>
+          </header>
+          <div className="edit-body">
+            {raw ? (
+              <div className="edit-heard">
+                <div className="quote">“{raw}”</div>
+              </div>
+            ) : null}
+            <div className="parsed">
+              <p className="edit-confirm-ask">{answerText}</p>
+              {answerRow ? (
+                <>
+                  <div className="name">{answerRow.actionLabel}</div>
+                  <div className="last">
+                    {formatKoreanDate(answerRow.lastPerformedOn)} ·{" "}
+                    {daysSince(answerRow.lastPerformedOn) === 0
+                      ? "오늘"
+                      : `${daysSince(answerRow.lastPerformedOn)}일 전`}
+                  </div>
+                </>
+              ) : null}
+              {answerCandidates.length > 0 ? (
+                <div className="candidate-list edit-candidate-list">
+                  {answerCandidates.map((row) => (
+                    <button
+                      key={row.actionKey}
+                      type="button"
+                      className="candidate"
+                      onClick={() =>
+                        void showAnswer(answerPhrase(row), source, row)
+                      }
+                    >
+                      {row.actionLabel}
+                      <span>{formatKoreanDate(row.lastPerformedOn)}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <div className="edit-footer">
+            {!answerRow && answerCandidates.length === 0 ? (
+              <button
+                type="button"
+                className="confirm"
+                onClick={startManualFromQuery}
+              >
+                지금 기록할게요
+              </button>
+            ) : null}
+            {answerRow ? (
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => openEdit(answerRow)}
+              >
+                기록 수정
+              </button>
+            ) : null}
+            <button type="button" className="ghost" onClick={closeSheet}>
+              닫기
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {phase === "composeText" ? (
+        <div className="edit-screen">
+          <header className="subhead">
+            <button
+              type="button"
+              className="back-link"
+              aria-label="뒤로"
+              onClick={closeSheet}
+            >
+              ‹
+            </button>
+            <div className="subhead-title">글로 남기기</div>
+            <button
+              type="button"
+              className="sheet-x edit-close"
+              aria-label="닫기"
+              onClick={closeSheet}
+            >
+              ×
+            </button>
+          </header>
+          <div className="edit-body">
+            <div className="parsed">
+              <label>내용</label>
+              <textarea
+                value={text}
+                onChange={(event) => setText(event.target.value)}
+                rows={4}
+                placeholder="예: 오늘 이불 빨았어 · 설거지 언제 했어?"
+                aria-label="글 입력"
+              />
+            </div>
+          </div>
+          <div className="edit-footer">
+            <button
+              type="button"
+              className="confirm"
+              disabled={!text.trim()}
+              onClick={submitComposeText}
+            >
+              확인할게요
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void toggleRecord()}
+            >
+              말로 할래요
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {phase === "match" ? (
+        <div className="edit-screen">
+          <header className="subhead">
+            <button
+              type="button"
+              className="back-link"
+              aria-label="뒤로"
+              onClick={closeSheet}
+            >
+              ‹
+            </button>
+            <div className="subhead-title">비슷한 기록이 있어요</div>
+            <button
+              type="button"
+              className="sheet-x edit-close"
+              aria-label="닫기"
+              onClick={closeSheet}
+            >
+              ×
+            </button>
+          </header>
+          <div className="edit-body">
+            {raw ? (
+              <div className="edit-heard">
+                <div className="quote">“{raw}”</div>
+              </div>
+            ) : null}
+            {matchMode === "query" && matchRow ? (
+              <div className="parsed">
+                <p className="edit-confirm-ask">
+                  {queryMatchPhrase(matchRow.actionLabel)}
+                </p>
+                <div className="name">{matchRow.actionLabel}</div>
+                <div className="last">
+                  {formatKoreanDate(matchRow.lastPerformedOn)} ·{" "}
+                  {daysSince(matchRow.lastPerformedOn) === 0
+                    ? "오늘"
+                    : `${daysSince(matchRow.lastPerformedOn)}일 전`}
+                </div>
+                {listeningYesNo ? (
+                  <p className="muted listen-hint">응 · 아니</p>
+                ) : null}
+              </div>
+            ) : null}
+            {matchMode === "save" && matchRow ? (
+              <div className="parsed">
+                <p className="edit-confirm-ask">
+                  {continuePhrase(
+                    matchRow.actionLabel,
+                    editDate,
+                    editSchedule,
+                  )}
+                </p>
+                <label>기존 항목</label>
+                <div className="name">{matchRow.actionLabel}</div>
+                {spokenAction &&
+                normalizeActionKey(spokenAction) !==
+                  normalizeActionKey(matchRow.actionLabel) ? (
+                  <p className="muted">
+                    “{spokenAction}”을 {matchRow.actionLabel}로 이어요
+                  </p>
+                ) : null}
+                <label>날짜</label>
+                <DateField value={editDate} onChange={setEditDate} />
+                <IntervalChips
+                  value={editSchedule}
+                  anchorDate={editDate}
+                  onChange={(next) => {
+                    setEditSchedule(next);
+                    editScheduleRef.current = next;
+                  }}
+                />
+                {listeningYesNo ? (
+                  <p className="muted listen-hint">응 · 아니</p>
+                ) : null}
+              </div>
+            ) : null}
+            {matchMode === "save" && !matchRow && matchCandidates.length > 0 ? (
+              <div className="parsed">
+                <p className="edit-confirm-ask">어떤 항목에 이을까요?</p>
+                <div className="candidate-list edit-candidate-list">
+                  {matchCandidates.map((row) => (
+                    <button
+                      key={row.actionKey}
+                      type="button"
+                      className="candidate"
+                      onClick={() => linkCandidate(row)}
+                    >
+                      {row.actionLabel}
+                      <span>{formatKoreanDate(row.lastPerformedOn)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <div className="edit-footer">
+            {matchMode === "query" && matchRow ? (
+              <>
+                <button
+                  type="button"
+                  className="confirm"
+                  onClick={acceptQueryMatch}
+                >
+                  맞아요
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={rejectQueryMatch}
+                >
+                  아니에요
+                </button>
+              </>
+            ) : null}
+            {matchMode === "save" && matchRow ? (
+              <>
+                <button
+                  type="button"
+                  className="confirm"
+                  onClick={acceptSaveLink}
+                >
+                  이어서 기록
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={startNewInstead}
+                >
+                  새로 기록
+                </button>
+              </>
+            ) : null}
+            {matchMode === "save" && !matchRow && matchCandidates.length > 0 ? (
+              <button
+                type="button"
+                className="ghost"
+                onClick={startNewInstead}
+              >
+                새로 기록
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {phase === "confirm" ? (
+        <div className="edit-screen">
+          <header className="subhead">
+            <button
+              type="button"
+              className="back-link"
+              aria-label="뒤로"
+              onClick={() => void cancelWithVoice(source === "voice")}
+            >
+              ‹
+            </button>
+            <div className="subhead-title">이렇게 들었어요</div>
+            <button
+              type="button"
+              className="sheet-x edit-close"
+              aria-label="닫기"
+              onClick={() => void cancelWithVoice(source === "voice")}
+            >
+              ×
+            </button>
+          </header>
+          <div className="edit-body">
+            {raw ? (
+              <div className="edit-heard">
+                <div className="quote">“{raw}”</div>
+                {parse ? (
+                  <span className="chip">{TYPE_LABEL[parse.utteranceType]}</span>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="parsed">
+              <label>행동</label>
+              <div className="field-row">
+                <input
+                  value={editAction}
+                  onChange={(event) => setEditAction(event.target.value)}
+                  placeholder="예: 이불 빨래"
+                />
+                {actionOk ? <span className="ok-mark">✓</span> : null}
+              </div>
+              {!actionOk ? (
+                <p className="field-error">행동 이름을 입력해 주세요</p>
+              ) : null}
+              {spokenAction &&
+              normalizeActionKey(spokenAction) !==
+                normalizeActionKey(editAction) ? (
+                <p className="muted">
+                  “{spokenAction}”을 {editAction}로 이어서 기록합니다
+                </p>
+              ) : null}
+              <label>날짜</label>
+              <DateField value={editDate} onChange={setEditDate} />
+              {!dateOk ? (
+                <p className="field-error">날짜 형식을 확인해 주세요</p>
+              ) : null}
+              <IntervalChips
+                value={editSchedule}
+                anchorDate={editDate}
+                onChange={(next) => {
+                  setEditSchedule(next);
+                  editScheduleRef.current = next;
+                }}
+              />
+              <p className="edit-confirm-ask">
+                {confirmPhrase(editAction || "이 일", editDate, editSchedule)}
+              </p>
+              {listeningYesNo ? (
+                <p className="muted listen-hint">
+                  응 · 아니 · 또는 “어제” / “시트 세탁”처럼 말해 주세요
+                </p>
+              ) : null}
+            </div>
+            {raw ? <RecognitionNote debug={debug} /> : null}
+          </div>
+          <div className="edit-footer">
+            <button
+              type="button"
+              className="confirm"
+              disabled={!actionOk || !dateOk}
+              onClick={() =>
+                void save(
+                  editAction.trim(),
+                  editDate,
+                  source,
+                  raw,
+                  source === "voice",
+                )
+              }
+            >
+              네, 기록할게요
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void cancelWithVoice(source === "voice")}
+            >
+              취소
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {phase === "editing" ? (
+        <div className="edit-screen">
+          <header className="subhead">
+            <button
+              type="button"
+              className="back-link"
+              aria-label="뒤로"
+              onClick={() => {
+                if (editingKey) {
+                  const row = rows.find((r) => r.actionKey === editingKey);
+                  if (row) {
+                    openQuick(row);
+                    return;
+                  }
+                }
+                closeSheet();
+              }}
+            >
+              ‹
+            </button>
+            <div className="subhead-title">내용 수정</div>
+            <button
+              type="button"
+              className="sheet-x edit-close"
+              aria-label="닫기"
+              onClick={closeSheet}
+            >
+              ×
+            </button>
+          </header>
+          <div className="edit-body">
+            <div className="parsed">
+              <label>행동</label>
+              <div className="field-row">
+                <input
+                  value={editAction}
+                  onChange={(event) => setEditAction(event.target.value)}
+                  placeholder="예: 이불 빨래"
+                />
+                {actionOk ? <span className="ok-mark">✓</span> : null}
+              </div>
+              {!actionOk ? (
+                <p className="field-error">행동 이름을 입력해 주세요</p>
+              ) : null}
+              <label>메모</label>
+              <textarea
+                value={editMemo}
+                onChange={(event) => setEditMemo(event.target.value)}
+                rows={3}
+                placeholder="메모 (선택)"
+              />
+              <label>마지막 수행일</label>
+              <DateField value={editDate} onChange={setEditDate} />
+              {!dateOk ? (
+                <p className="field-error">날짜 형식을 확인해 주세요</p>
+              ) : null}
+              <IntervalChips
+                value={editSchedule}
+                anchorDate={editDate}
+                onChange={(next) => {
+                  setEditSchedule(next);
+                  editScheduleRef.current = next;
+                }}
+              />
+            </div>
+          </div>
+          <div className="edit-footer">
+            <button
+              type="button"
+              className="confirm"
+              disabled={!actionOk || !dateOk}
+              onClick={() => void saveEdit()}
+            >
+              저장할게요
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {phase === "rejected" ? (
+        <div className="edit-screen">
+          <header className="subhead">
+            <button
+              type="button"
+              className="back-link"
+              aria-label="뒤로"
+              onClick={closeSheet}
+            >
+              ‹
+            </button>
+            <div className="subhead-title">직접 고쳐 기록</div>
+            <button
+              type="button"
+              className="sheet-x edit-close"
+              aria-label="닫기"
+              onClick={closeSheet}
+            >
+              ×
+            </button>
+          </header>
+          <div className="edit-body">
+            {raw || parse ? (
+              <div className="edit-heard">
+                {raw ? <div className="quote">“{raw}”</div> : null}
+                {parse ? (
+                  <span className="chip warn">
+                    {TYPE_LABEL[parse.utteranceType]}
+                  </span>
+                ) : null}
+                <p className="reason">
+                  {parse ? REJECT_COPY[parse.utteranceType] : status}
+                </p>
+              </div>
+            ) : status ? (
+              <p className="edit-reject-hint">{status}</p>
+            ) : null}
+            <div className="parsed">
+              <label>행동</label>
+              <div className="field-row">
+                <input
+                  value={editAction}
+                  onChange={(event) => setEditAction(event.target.value)}
+                  placeholder="예: 이불 빨래"
+                />
+                {actionOk ? <span className="ok-mark">✓</span> : null}
+              </div>
+              {!actionOk ? (
+                <p className="field-error">행동 이름을 입력해 주세요</p>
+              ) : null}
+              <label>날짜</label>
+              <DateField value={editDate} onChange={setEditDate} />
+              {!dateOk ? (
+                <p className="field-error">날짜 형식을 확인해 주세요</p>
+              ) : null}
+              <IntervalChips
+                value={editSchedule}
+                anchorDate={editDate}
+                onChange={(next) => {
+                  setEditSchedule(next);
+                  editScheduleRef.current = next;
+                }}
+              />
+            </div>
+            {raw ? <RecognitionNote debug={debug} /> : null}
+          </div>
+          <div className="edit-footer">
+            <button
+              type="button"
+              className="confirm"
+              disabled={!actionOk || !dateOk}
+              onClick={() => {
+                setPhase("confirm");
+                if (source === "voice") {
+                  void askRecordConfirm(
+                    editAction.trim(),
+                    editDate,
+                    raw || editAction.trim(),
+                    source,
+                  );
+                }
+              }}
+            >
+              이대로 기록할게요
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void toggleRecord()}
+            >
+              다시 말하기
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {pendingDelete && (
         <div
