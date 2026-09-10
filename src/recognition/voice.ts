@@ -1,10 +1,15 @@
 import { shiftKstDate, todayKst } from "../lib/kst";
+import { loadVoiceGuideEnabled } from "../lib/settings";
 import type { ReminderSchedule } from "../lib/types";
 import { extractRelativeDate } from "./dates";
 import { formatScheduleLabel, normalizeSchedule } from "./intervals";
 
 export function speak(text: string): Promise<void> {
   return new Promise((resolve) => {
+    if (!loadVoiceGuideEnabled()) {
+      resolve();
+      return;
+    }
     if (!("speechSynthesis" in window)) {
       resolve();
       return;

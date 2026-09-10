@@ -130,12 +130,13 @@ export function applyLfmSlots(
   raw: string,
   rules: ParseResult,
   extracted: LfmSlots,
+  now = new Date(),
 ): ParseResult {
   const lfmAction = extracted.action?.trim() || null;
   const cleanedLfm = lfmAction ? guessAction(lfmAction) : null;
   const action = cleanedLfm || lfmAction || rules.action;
 
-  const relative = extractRelativeDate(raw);
+  const relative = extractRelativeDate(raw, now);
   const date = relative?.date
     ?? (looksIso(extracted.date) ? extracted.date : null)
     ?? rules.date;
@@ -146,7 +147,9 @@ export function applyLfmSlots(
   const utteranceType =
     rules.utteranceType === "incomplete"
       ? "incomplete"
-      : (extracted.intent ?? rules.utteranceType);
+      : rules.utteranceType === "completed"
+        ? "completed"
+        : (extracted.intent ?? rules.utteranceType);
 
   return {
     ...rules,
@@ -159,7 +162,11 @@ export function applyLfmSlots(
     reason:
       rules.utteranceType === "incomplete"
         ? `${rules.reason} · 부정은 규칙 유지`
-        : `LFM 유형 ${utteranceType} · 할일·날짜·주기 추출`,
+        : rules.utteranceType === "completed" &&
+            extracted.intent &&
+            extracted.intent !== "completed"
+          ? `${rules.reason} · 완료 표지는 규칙 유지`
+          : `LFM 유형 ${utteranceType} · 할일·날짜·주기 추출`,
   };
 }
 

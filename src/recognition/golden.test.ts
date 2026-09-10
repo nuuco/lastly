@@ -41,6 +41,8 @@ function seedRows(): RecordRow[] {
     inputPath: "text" as const,
     schedule: null,
     aliases: [],
+    memo: "",
+    snoozeUntil: null,
     updatedAt: "2026-09-06T00:00:00.000Z",
   }));
 }

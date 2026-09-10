@@ -16,6 +16,8 @@ const row = (
   inputPath: "voice",
   schedule: interval != null ? { kind: "everyDays", days: interval } : null,
   aliases,
+  memo: "",
+  snoozeUntil: null,
   updatedAt: "2026-09-06T00:00:00.000Z",
 });
 

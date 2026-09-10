@@ -28,4 +28,10 @@ describe("classifyUtterance", () => {
     expect(result.utteranceType).toBe("query");
     expect(result.action).toBe("시트 세탁");
   });
+
+  it("짧은 ‘함’도 완료다", () => {
+    const result = classifyUtterance("베란다 청소 오늘 함", FROZEN_NOW);
+    expect(result.utteranceType).toBe("completed");
+    expect(result.date).toBe(resolveDateToken("오늘"));
+  });
 });
