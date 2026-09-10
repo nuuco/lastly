@@ -1,4 +1,4 @@
-import type { ReminderSchedule } from "./types";
+import type { DueInfo, ReminderSchedule } from "./types";
 import { normalizeSchedule } from "../recognition/intervals";
 
 const KST = "Asia/Seoul";
@@ -292,6 +292,35 @@ export function isOverdue(
   const due = nextDueOn(lastPerformedOn, schedule);
   if (!due) return false;
   return todayKst(now) >= due;
+}
+
+/** 곧 = 기한까지 0~3일(오늘 포함) */
+export const SOON_DAYS = 3;
+
+/**
+ * 주기 있는 항목의 지남/곧/여유.
+ * snoozeUntil이 오늘 이상이면 null(요약·뱃지에서 숨김).
+ */
+export function dueInfo(
+  lastPerformedOn: string,
+  schedule: ReminderSchedule | number | null | undefined,
+  snoozeUntil: string | null | undefined = null,
+  now = new Date(),
+): DueInfo | null {
+  const dueOn = nextDueOn(lastPerformedOn, schedule);
+  if (!dueOn) return null;
+  const today = todayKst(now);
+  if (snoozeUntil && snoozeUntil >= today) return null;
+
+  const daysToDue = daysBetween(today, dueOn);
+  if (daysToDue < 0) {
+    const n = Math.abs(daysToDue);
+    return { kind: "late", dueOn, daysToDue, label: `D+${n}` };
+  }
+  if (daysToDue <= SOON_DAYS) {
+    return { kind: "soon", dueOn, daysToDue, label: `D-${daysToDue}` };
+  }
+  return { kind: "ok", dueOn, daysToDue, label: `D-${daysToDue}` };
 }
 
 export function formatKoreanDate(isoDate: string): string {

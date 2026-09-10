@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { daysBetween, dueDatesInRange } from "./kst";
+import { daysBetween, dueDatesInRange, dueInfo } from "./kst";
 
 describe("dueDatesInRange", () => {
   it("2일마다면 구간의 해당일을 모두 낸다", () => {
@@ -65,5 +65,32 @@ describe("dueDatesInRange", () => {
     for (let i = 1; i < dates.length; i += 1) {
       expect(daysBetween(dates[i - 1], dates[i])).toBe(2);
     }
+  });
+});
+
+describe("dueInfo", () => {
+  it("지남·곧·여유를 나눈다", () => {
+    const now = new Date("2026-09-10T12:00:00+09:00");
+    expect(
+      dueInfo("2026-08-01", { kind: "everyDays", days: 7 }, null, now)?.kind,
+    ).toBe("late");
+    expect(
+      dueInfo("2026-09-08", { kind: "everyDays", days: 3 }, null, now)?.label,
+    ).toBe("D-1");
+    expect(
+      dueInfo("2026-09-01", { kind: "everyDays", days: 20 }, null, now)?.kind,
+    ).toBe("ok");
+  });
+
+  it("snooze면 숨긴다", () => {
+    const now = new Date("2026-09-10T12:00:00+09:00");
+    expect(
+      dueInfo(
+        "2026-08-01",
+        { kind: "everyDays", days: 7 },
+        "2026-09-11",
+        now,
+      ),
+    ).toBeNull();
   });
 });

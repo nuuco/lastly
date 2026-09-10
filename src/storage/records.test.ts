@@ -45,6 +45,12 @@ describe("normalizeRow", () => {
   it("별칭이 없으면 빈 배열이다", () => {
     expect(normalizeRow(base).aliases).toEqual([]);
   });
+
+  it("memo·snoozeUntil 없으면 기본값이다", () => {
+    const row = normalizeRow(base);
+    expect(row.memo).toBe("");
+    expect(row.snoozeUntil).toBeNull();
+  });
 });
 
 describe("mergeAliases", () => {

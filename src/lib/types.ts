@@ -49,7 +49,40 @@ export type RecordRow = {
   schedule: ReminderSchedule | null;
   /** 같은 항목으로 확인된 다른 호칭 */
   aliases: string[];
+  /** 목록·알림 부제. 빈 문자열 허용 */
+  memo: string;
+  /** 쉬어가기. 그날까지 지남/곧·알림함에서 뺌 */
+  snoozeUntil: string | null;
   updatedAt: string;
+};
+
+/** 주기가 있는 항목의 기한 상태. 주기 없으면 null */
+export type DueKind = "late" | "soon" | "ok";
+
+export type DueInfo = {
+  kind: DueKind;
+  dueOn: string;
+  /** 오늘 기준: 음수=지남(D+), 0=오늘, 양수=남음(D-) */
+  daysToDue: number;
+  label: string;
+};
+
+export type InboxStatus = "open" | "done" | "snoozed";
+
+export type InboxItem = {
+  id: string;
+  actionKey: string;
+  dueOn: string;
+  createdAt: string;
+  read: boolean;
+  status: InboxStatus;
+};
+
+export type NotifySettings = {
+  /** 알림함/OS 알림을 켤지 */
+  enabled: boolean;
+  time: string;
+  weekends: boolean;
 };
 
 export type SttProvider =
@@ -79,3 +112,5 @@ export type RecognitionDebug = {
 };
 
 export type ViewMode = "list" | "calendar";
+
+export type StatusFilter = "all" | DueKind;
