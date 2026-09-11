@@ -4,6 +4,7 @@ import { classifyUtterance, guessAction } from "./utteranceRules";
 import { extractRelativeDate } from "./dates";
 import { extractSchedule } from "./intervals";
 import { disposeWhisper } from "./stt";
+import { understandLoadLabel } from "./progressLabel";
 
 type LfmOut =
   | { type: "ready"; device: "webgpu" | "wasm"; model: string }
@@ -64,12 +65,7 @@ export async function loadLfm(): Promise<void> {
     const handle = (event: MessageEvent<LfmOut>) => {
       const data = event.data;
       if (data.type === "progress") {
-        const pct = data.info.progress
-          ? `${Math.round(data.info.progress)}%`
-          : "";
-        onProgress?.(
-          `LFM2.5 준비 ${data.info.file ?? ""} ${pct}`.trim(),
-        );
+        onProgress?.(understandLoadLabel(data.info));
       }
       if (data.type === "ready") {
         current.removeEventListener("message", handle);

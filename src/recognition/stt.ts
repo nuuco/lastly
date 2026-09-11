@@ -1,4 +1,5 @@
 import { blobToWhisperAudio } from "./audio";
+import { transcribeLoadLabel } from "./progressLabel";
 import { isOnDeviceSpeechAvailable } from "./webSpeech";
 import type { SttResult } from "../lib/types";
 
@@ -42,12 +43,7 @@ export function loadWhisper(): Promise<{ device: "webgpu" | "wasm"; model: strin
     const handle = (event: MessageEvent<WhisperWorkerOut>) => {
       const data = event.data;
       if (data.type === "progress") {
-        const pct = data.info.progress
-          ? `${Math.round(data.info.progress)}%`
-          : "";
-        onProgress?.(
-          `whisper-base 준비 ${data.info.file ?? ""} ${pct}`.trim(),
-        );
+        onProgress?.(transcribeLoadLabel(data.info));
       }
       if (data.type === "ready") {
         current.removeEventListener("message", handle);
@@ -106,7 +102,7 @@ export async function probeOnDeviceSpeech(): Promise<boolean> {
 }
 
 export async function transcribeBlob(blob: Blob): Promise<SttResult> {
-  onProgress?.("음성 변환 준비");
+  onProgress?.("받아쓰기 준비를 하고 있어요");
   await loadWhisper();
   const { audio, sampling_rate } = await blobToWhisperAudio(blob);
   return transcribeWithWhisper(audio, sampling_rate);

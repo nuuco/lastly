@@ -116,3 +116,4 @@
 - README: WebGPU·Whisper/LFM 구조와 모델 선택 이유 추가
 - README 온디바이스 AI: 코드 대조(Web Speech·Chrome 폴백·슬롯 병합) 반영
 - 빈 화면 안내: file://일 때만, npm run dev 후 localhost를 열라는 문구
+- 모델 준비 UI: onnx 파일명 대신 이해·받아쓰기 준비 문구
