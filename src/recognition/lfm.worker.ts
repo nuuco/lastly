@@ -12,6 +12,7 @@ type Generator = (
 type In =
   | { type: "load" }
   | { type: "extract"; text: string; today: string }
+  | { type: "match"; query: string; labels: string[] }
   | { type: "dispose" };
 
 let generator: Generator | null = null;
@@ -81,6 +82,44 @@ function readInterval(value: unknown): string | null {
   return s;
 }
 
+async function generate(
+  messages: unknown,
+  maxNewTokens: number,
+): Promise<string> {
+  if (!generator) await load();
+  if (!generator) throw new Error("LFM 로드 실패");
+  const output = await generator(messages, {
+    max_new_tokens: maxNewTokens,
+    temperature: 0,
+  });
+  const first = Array.isArray(output) ? output[0] : output;
+  const generated =
+    first && typeof first === "object" && "generated_text" in first
+      ? first.generated_text
+      : first;
+  if (Array.isArray(generated)) {
+    const last = generated.at(-1);
+    return typeof last === "object" && last && "content" in last
+      ? String(last.content)
+      : String(last ?? "");
+  }
+  return String(generated ?? "");
+}
+
+function pickMatchLabel(raw: string, labels: string[]): string | null {
+  const json = parseJson(raw) as { match?: unknown } | null;
+  const value = json?.match;
+  if (value == null) return null;
+  const s = String(value).trim();
+  if (!s || s === "null" || s === "없음" || s === "none") return null;
+  const asNum = Number(s);
+  if (Number.isInteger(asNum) && String(asNum) === s) {
+    return labels[asNum - 1] ?? labels[asNum] ?? null;
+  }
+  const key = s.replace(/\s+/g, " ");
+  return labels.find((label) => label.replace(/\s+/g, " ") === key) ?? null;
+}
+
 self.onmessage = async (event: MessageEvent<In>) => {
   const data = event.data;
   try {
@@ -94,42 +133,25 @@ self.onmessage = async (event: MessageEvent<In>) => {
       return;
     }
     if (data.type === "extract") {
-      if (!generator) await load();
-      if (!generator) throw new Error("LFM 로드 실패");
       const started = Date.now();
-      const messages = [
-        {
-          role: "system",
-          content:
-            "한국어 생활 문장의 의도(조회/완료/예정/미완료/불확실)와 할일·날짜·주기를 JSON만으로 답하세요. 설명 금지.",
-        },
-        {
-          role: "user",
-          content: `오늘 날짜는 ${data.today} (한국 시간)입니다. 문장: "${data.text}"
+      const raw = await generate(
+        [
+          {
+            role: "system",
+            content:
+              "한국어 생활 문장의 의도(조회/완료/예정/미완료/불확실)와 할일·날짜·주기를 JSON만으로 답하세요. 설명 금지.",
+          },
+          {
+            role: "user",
+            content: `오늘 날짜는 ${data.today} (한국 시간)입니다. 문장: "${data.text}"
 intent: query=언제 했는지 물어봄, completed=한 일을 기록, planned=앞으로 할 예정, incomplete=못/안 함, uncertain=애매
 action은 명사구만. 조회면 date는 null. 완료인데 날짜 없으면 오늘. 주기 없으면 interval은 null.
 {"intent":"query","action":"시트 세탁","date":null,"interval":null}
 {"intent":"completed","action":"빨래","date":"YYYY-MM-DD","interval":"2주마다"}`,
-        },
-      ];
-      const output = await generator(messages, {
-        max_new_tokens: 120,
-        temperature: 0,
-      });
-      const first = Array.isArray(output) ? output[0] : output;
-      const generated =
-        first && typeof first === "object" && "generated_text" in first
-          ? first.generated_text
-          : first;
-      let raw = "";
-      if (Array.isArray(generated)) {
-        const last = generated.at(-1);
-        raw = typeof last === "object" && last && "content" in last
-          ? String(last.content)
-          : String(last ?? "");
-      } else {
-        raw = String(generated ?? "");
-      }
+          },
+        ],
+        120,
+      );
       const json = parseJson(raw);
       self.postMessage({
         type: "result",
@@ -140,6 +162,40 @@ action은 명사구만. 조회면 date는 null. 완료인데 날짜 없으면 �
         device,
         latencyMs: Date.now() - started,
         model: "onnx-community/LFM2.5-350M-ONNX",
+        raw,
+      });
+      return;
+    }
+    if (data.type === "match") {
+      const started = Date.now();
+      const list = data.labels
+        .map((label, i) => `${i + 1}. ${label}`)
+        .join("\n");
+      const raw = await generate(
+        [
+          {
+            role: "system",
+            content:
+              "한국어 생활 일이 기존 기록과 같은 행위인지 JSON만으로 답하세요. 설명 금지.",
+          },
+          {
+            role: "user",
+            content: `할일: "${data.query}"
+기존:
+${list}
+같은 행위만 고르세요. 대상만 같고 하는 일이 다르면 null (강아지 산책 ≠ 강아지 예방접종).
+빨래/세탁, 이불/침구/시트는 같은 일. 짧게 말한 조회(강아지)는 그 대상의 일이 하나면 고르고, 여러 개면 null.
+{"match":null}
+{"match":"이불 빨래"}`,
+          },
+        ],
+        40,
+      );
+      self.postMessage({
+        type: "match-result",
+        label: pickMatchLabel(raw, data.labels),
+        device,
+        latencyMs: Date.now() - started,
         raw,
       });
     }

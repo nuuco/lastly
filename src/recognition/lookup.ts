@@ -66,6 +66,10 @@ function scoreAgainst(query: string, name: string): number {
       let distShared = 0;
       for (const token of distQ) if (distN.has(token)) distShared += 1;
       if (distShared === 0) return 0;
+      const qHasExtra = [...distQ].some((t) => !distN.has(t));
+      const nHasExtra = [...distN].some((t) => !distQ.has(t));
+      // 강아지 산책 vs 강아지 예방접종처럼 대상만 같고 일이 다르면 다른 항목
+      if (qHasExtra && nHasExtra) return 0;
     }
     const same =
       setQ.size === setN.size && [...setQ].every((t) => setN.has(t));
@@ -74,9 +78,6 @@ function scoreAgainst(query: string, name: string): number {
       [...setQ].every((t) => setN.has(t)) ||
       [...setN].every((t) => setQ.has(t));
     if (subset) return 75;
-    let shared = 0;
-    for (const t of setQ) if (setN.has(t)) shared += 1;
-    if (shared > 0) return 60 + Math.min(20, shared * 8);
   }
 
   if (n.includes(q) || q.includes(n)) return 70 + Math.min(20, q.length);
@@ -123,6 +124,68 @@ export function matchRecords(
   }
   if (top.s >= 55) return { kind: "similar", row: top.row };
   return { kind: "none", query: q };
+}
+
+function findRowByName(rows: RecordRow[], name: string): RecordRow | undefined {
+  const key = normalizeActionKey(name);
+  return rows.find((row) =>
+    namesOf(row).some((n) => normalizeActionKey(n) === key),
+  );
+}
+
+export function applyLfmLink(
+  query: string,
+  rows: RecordRow[],
+  linked: string | null,
+): LookupMatch | null {
+  if (!linked) return null;
+  const row = findRowByName(rows, linked);
+  if (!row) return null;
+  const q = normalizeActionKey(query);
+  const exact = namesOf(row).some((n) => normalizeActionKey(n) === q);
+  return exact ? { kind: "exact", row } : { kind: "similar", row };
+}
+
+export type RecordLinkFn = (
+  query: string,
+  labels: string[],
+) => Promise<string | null>;
+
+/**
+ * 이름·별칭이 같거나 동의어 집합이 같으면 바로.
+ * 그 외 저장은 LFM이 같은 행위라고 할 때만 잇고, 단어 하나 겹침으로는 잇지 않음.
+ * 조회는 LFM이 고르지 못하면 토큰 매칭으로 되묻기.
+ */
+export async function resolveRecordMatch(
+  query: string | null,
+  rows: RecordRow[],
+  mode: "save" | "query",
+  link?: RecordLinkFn,
+): Promise<LookupMatch> {
+  const q = (query ?? "").trim();
+  if (!q) return { kind: "none", query: "" };
+
+  const token = matchRecords(q, rows);
+  if (token.kind === "exact") return token;
+  if (token.kind === "similar" && score(q, token.row) >= 88) return token;
+  if (rows.length === 0) return { kind: "none", query: q };
+
+  if (link) {
+    try {
+      const labels = [...new Set(rows.map((row) => row.actionLabel))];
+      const linked = await link(q, labels);
+      const fromLfm = applyLfmLink(q, rows, linked);
+      if (fromLfm) return fromLfm;
+      if (mode === "save") return { kind: "none", query: q };
+      return token;
+    } catch {
+      if (mode === "save") return { kind: "none", query: q };
+      return token;
+    }
+  }
+
+  if (mode === "save") return { kind: "none", query: q };
+  return token;
 }
 
 export function answerPhrase(row: RecordRow, now = new Date()): string {

@@ -37,12 +37,13 @@ import {
 import { formatScheduleLabel } from "../recognition/intervals";
 import {
   answerPhrase,
-  matchRecords,
+  resolveRecordMatch,
   missingPhrase,
   queryMatchPhrase,
 } from "../recognition/lookup";
 import {
   getLfmLoadError,
+  matchActionWithLfm,
   parseUtterance,
   setParseProgressHandler,
 } from "../recognition/parse";
@@ -475,7 +476,12 @@ export default function HomePage() {
     path: InputPath,
     currentRows: RecordRow[],
   ) => {
-    const matched = matchRecords(result.action, currentRows);
+    const matched = await resolveRecordMatch(
+      result.action,
+      currentRows,
+      "query",
+      matchActionWithLfm,
+    );
     if (matched.kind === "exact") {
       await showAnswer(answerPhrase(matched.row), path, matched.row);
       return;
@@ -621,7 +627,12 @@ export default function HomePage() {
     const current = await reload();
     const spoken = (result.action ?? "").trim();
     const date = result.date ?? todayKst();
-    const matched = matchRecords(spoken || null, current);
+    const matched = await resolveRecordMatch(
+      spoken || null,
+      current,
+      "save",
+      matchActionWithLfm,
+    );
 
     const fillFrom = (row: RecordRow | null) => {
       const action = (row?.actionLabel ?? spoken).trim();
@@ -1280,7 +1291,7 @@ export default function HomePage() {
                         className="candidate"
                         onClick={() => openQuick(row)}
                       >
-                        {row.actionLabel}
+                        <span className="candidate-name">{row.actionLabel}</span>
                         <span>수행</span>
                       </button>
                     ))}
@@ -1296,7 +1307,7 @@ export default function HomePage() {
                         className="candidate candidate-due"
                         onClick={() => openQuick(row)}
                       >
-                        {row.actionLabel}
+                        <span className="candidate-name">{row.actionLabel}</span>
                         <span>
                           {row.schedule
                             ? formatScheduleLabel(row.schedule)
@@ -1485,7 +1496,7 @@ export default function HomePage() {
                         void showAnswer(answerPhrase(row), source, row)
                       }
                     >
-                      {row.actionLabel}
+                      <span className="candidate-name">{row.actionLabel}</span>
                       <span>{formatKoreanDate(row.lastPerformedOn)}</span>
                     </button>
                   ))}
@@ -1660,7 +1671,7 @@ export default function HomePage() {
                       className="candidate"
                       onClick={() => linkCandidate(row)}
                     >
-                      {row.actionLabel}
+                      <span className="candidate-name">{row.actionLabel}</span>
                       <span>{formatKoreanDate(row.lastPerformedOn)}</span>
                     </button>
                   ))}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { addDaysIso, isOverdue } from "../lib/kst";
-import { matchRecords, answerPhrase } from "./lookup";
+import { matchRecords, resolveRecordMatch, answerPhrase } from "./lookup";
 import type { RecordRow } from "../lib/types";
 
 const row = (
@@ -60,6 +60,62 @@ describe("lookup", () => {
       row("선풍기 청소", "2026-09-01"),
     ];
     expect(matchRecords("에어컨 청소", rows).kind).toBe("none");
+  });
+
+  it("대상만 같고 일이 다르면 비슷한 항목이 아니다", () => {
+    const rows = [row("강아지 예방접종", "2026-09-02")];
+    expect(matchRecords("강아지 산책", rows).kind).toBe("none");
+    expect(matchRecords("강아지 산책을", rows).kind).toBe("none");
+  });
+
+  it("대상만 말하면 그 대상의 기록에 잇는다", () => {
+    const rows = [row("강아지 예방접종", "2026-09-02")];
+    const hit = matchRecords("강아지", rows);
+    expect(hit.kind).toBe("similar");
+    if (hit.kind === "similar") {
+      expect(hit.row.actionLabel).toBe("강아지 예방접종");
+    }
+  });
+
+  it("저장은 LFM이 다른 행위면 잇지 않는다", async () => {
+    const rows = [row("강아지 예방접종", "2026-09-02")];
+    const hit = await resolveRecordMatch(
+      "강아지 산책",
+      rows,
+      "save",
+      async () => null,
+    );
+    expect(hit.kind).toBe("none");
+  });
+
+  it("저장은 LFM이 같은 행위면 잇는다", async () => {
+    const rows = [row("이불 빨래", "2026-09-02")];
+    const hit = await resolveRecordMatch(
+      "시트 빨기",
+      rows,
+      "save",
+      async () => "이불 빨래",
+    );
+    expect(hit.kind).toBe("similar");
+    if (hit.kind === "similar") {
+      expect(hit.row.actionLabel).toBe("이불 빨래");
+    }
+  });
+
+  it("동의어 집합이 같으면 저장에 LFM을 부르지 않는다", async () => {
+    const rows = [row("이불 빨래", "2026-09-02")];
+    let called = 0;
+    const hit = await resolveRecordMatch(
+      "이불 세탁",
+      rows,
+      "save",
+      async () => {
+        called += 1;
+        return null;
+      },
+    );
+    expect(called).toBe(0);
+    expect(hit.kind).toBe("similar");
   });
 
   it("답변 문구를 만든다", () => {

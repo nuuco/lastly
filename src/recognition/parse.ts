@@ -20,6 +20,13 @@ type LfmOut =
       model: string;
       raw: string;
     }
+  | {
+      type: "match-result";
+      label: string | null;
+      device: "webgpu" | "wasm";
+      latencyMs: number;
+      raw: string;
+    }
   | { type: "error"; message: string };
 
 export type LfmSlots = {
@@ -107,6 +114,37 @@ function extractWithLfm(text: string, today: string) {
     };
     current.addEventListener("message", handle);
     current.postMessage({ type: "extract", text, today });
+  });
+}
+
+const MAX_MATCH_LABELS = 24;
+
+/** 기존 기록 이름 중에서 같은 행위인지 LFM이 고른다. 다르면 null */
+export async function matchActionWithLfm(
+  query: string,
+  labels: string[],
+): Promise<string | null> {
+  const unique = [...new Set(labels.map((label) => label.trim()).filter(Boolean))];
+  if (!query.trim() || unique.length === 0) return null;
+  onProgress?.("같은 일인지 보고 있어요");
+  await loadLfm();
+  const current = getWorker();
+  const picked = unique.slice(0, MAX_MATCH_LABELS);
+  return new Promise((resolve, reject) => {
+    const handle = (event: MessageEvent<LfmOut>) => {
+      const data = event.data;
+      if (data.type === "match-result") {
+        current.removeEventListener("message", handle);
+        resolve(data.label);
+      }
+      if (data.type === "error") {
+        current.removeEventListener("message", handle);
+        lastError = data.message;
+        reject(new Error(data.message));
+      }
+    };
+    current.addEventListener("message", handle);
+    current.postMessage({ type: "match", query: query.trim(), labels: picked });
   });
 }
 

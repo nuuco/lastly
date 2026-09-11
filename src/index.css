@@ -27,6 +27,7 @@ html,
 body,
 #root {
   height: 100%;
+  max-width: 100%;
 }
 
 body {
@@ -55,11 +56,13 @@ input {
 .phone {
   position: relative;
   width: min(100%, 380px);
+  max-width: 100%;
   height: min(772px, 100dvh);
   background: #121212;
   border-radius: 48px;
   padding: 13px;
   box-shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
 }
 
 .screen {
@@ -711,6 +714,8 @@ input {
   margin-bottom: 14px;
   text-align: left;
   min-height: 52px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .dictation.placeholder,
@@ -774,6 +779,8 @@ input {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .date-shell {
@@ -1154,6 +1161,8 @@ input {
 
 .interval-block {
   margin-top: 4px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .interval-chips {
@@ -1350,12 +1359,14 @@ input {
 }
 
 .candidate {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  width: calc(100% + 44px);
-  margin: 0 -22px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
   border: none;
   border-bottom: 1px solid var(--line);
   border-radius: 0;
@@ -1368,6 +1379,7 @@ input {
   cursor: pointer;
   text-align: left;
   box-sizing: border-box;
+  overflow: hidden;
   transition: background 0.15s ease;
 }
 
@@ -1379,11 +1391,27 @@ input {
   background: var(--hover);
 }
 
+.sheet .candidate {
+  width: calc(100% + 44px);
+  max-width: none;
+  margin-left: -22px;
+  margin-right: -22px;
+}
+
 .candidate span {
-  flex-shrink: 0;
   font-weight: 500;
   font-size: 12px;
   color: var(--soft);
+  white-space: nowrap;
+}
+
+.candidate-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--ink);
 }
 
 .chip {
@@ -1505,10 +1533,14 @@ input {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .field-row input {
   flex: 1;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .field-error {
@@ -1768,8 +1800,7 @@ input {
 }
 
 .screen.subpage {
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden;
   min-width: 0;
 }
 
@@ -1777,6 +1808,7 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex: 0 0 auto;
   padding: 16px 18px 8px;
 }
 
@@ -1820,8 +1852,12 @@ input {
 
 .subbody {
   padding: 4px 0 28px;
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .page-title {
@@ -2300,6 +2336,11 @@ input {
 .edit-screen {
   position: absolute;
   inset: 0;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
   z-index: 40;
   background: var(--screen);
   display: flex;
@@ -2333,9 +2374,13 @@ input {
 }
 
 .edit-body {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 4px 18px 16px;
   -webkit-overflow-scrolling: touch;
 }
@@ -2353,6 +2398,8 @@ input {
   margin: 0 0 8px;
   font-size: 15px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .edit-heard .reason {
@@ -2370,6 +2417,7 @@ input {
   line-height: 1.45;
   color: var(--ink);
   text-align: left;
+  overflow-wrap: anywhere;
 }
 
 .edit-reject-hint {
@@ -2391,13 +2439,14 @@ input {
 }
 
 .edit-body .candidate-list.edit-candidate-list {
-  margin: 0;
+  margin: 0 -18px;
+  max-width: none;
 }
 
 .edit-body .candidate {
-  width: calc(100% + 36px);
-  margin-left: -18px;
-  margin-right: -18px;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
   padding-left: 18px;
   padding-right: 18px;
 }
@@ -2410,6 +2459,8 @@ input {
   background: transparent;
   box-shadow: none;
   border-radius: 0;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .edit-body .parsed label {
@@ -2425,6 +2476,8 @@ input {
   border-radius: 0;
   padding: 8px 0 9px;
   font-size: 15px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .edit-body .parsed input:focus {
@@ -2434,6 +2487,9 @@ input {
 
 .edit-body .parsed textarea {
   min-height: 72px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   border: none;
   border-radius: 12px;
   background: var(--line2);
@@ -2456,6 +2512,8 @@ input {
 
 .edit-body .interval-block {
   margin-top: 2px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .edit-body .interval-chips {
@@ -2465,11 +2523,18 @@ input {
 .edit-body .interval-custom-panel {
   margin-top: 8px;
   padding: 8px 4px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .edit-footer {
   flex: 0 0 auto;
-  padding: 12px 18px 22px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 12px 18px max(22px, env(safe-area-inset-bottom));
   background: var(--screen);
   display: flex;
   flex-direction: column;
@@ -2489,17 +2554,44 @@ input {
 }
 
 @media (max-width: 520px) {
+  html,
+  body,
+  #root {
+    overflow: hidden;
+    height: 100dvh;
+    max-width: 100%;
+  }
   .app-stage {
     padding: 0;
+    height: 100dvh;
+    max-width: 100%;
+    overflow: hidden;
   }
   .phone {
     width: 100%;
+    max-width: 100%;
     height: 100dvh;
     border-radius: 0;
     padding: 0;
     box-shadow: none;
+    overflow: hidden;
   }
   .screen {
     border-radius: 0;
+  }
+  .apphead {
+    padding-top: max(18px, env(safe-area-inset-top));
+  }
+  .subhead {
+    padding-top: max(16px, env(safe-area-inset-top));
+  }
+  .edit-screen .subhead {
+    padding-top: max(12px, env(safe-area-inset-top));
+  }
+  .composer {
+    padding-bottom: max(26px, env(safe-area-inset-bottom));
+  }
+  .sheet {
+    padding-bottom: max(30px, env(safe-area-inset-bottom));
   }
 }
