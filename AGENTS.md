@@ -115,3 +115,4 @@
 - 호버: 포인트 색 투명도 0.08 → 0.04로 연하게
 - README: WebGPU·Whisper/LFM 구조와 모델 선택 이유 추가
 - README 온디바이스 AI: 코드 대조(Web Speech·Chrome 폴백·슬롯 병합) 반영
+- 빈 화면 안내: file://일 때만, npm run dev 후 localhost를 열라는 문구
