@@ -43,6 +43,7 @@ import {
 } from "../recognition/lookup";
 import {
   getLfmLoadError,
+  loadLfm,
   matchActionWithLfm,
   parseUtterance,
   setParseProgressHandler,
@@ -222,6 +223,11 @@ export default function HomePage() {
     void hasWebGpu().then((webgpu) =>
       setDebug((prev) => ({ ...prev, webgpu })),
     );
+    // 첫 말하기 직후 이해 대기를 줄이려고, 홈 진입 후 이해 모델을 미리 받음
+    const warmId = window.setTimeout(() => {
+      void loadLfm({ silent: true }).catch(() => undefined);
+    }, 600);
+    return () => window.clearTimeout(warmId);
   }, []);
 
   useEffect(() => {
@@ -908,6 +914,8 @@ export default function HomePage() {
     lastHeardAt.current = 0;
     liveStartedAt.current = Date.now();
     finishingRef.current = false;
+    // 말하는 동안 이해 모델을 같이 준비 (캐시돼 있으면 즉시 반환)
+    void loadLfm().catch(() => undefined);
 
     if (!canUseLiveSpeech()) {
       void startWhisperOnly("이 브라우저는 받아쓰기가 없어요 · 녹음으로 들을게요");
@@ -920,6 +928,7 @@ export default function HomePage() {
     setText("");
     setStatus("");
     setPhase("composeText");
+    void loadLfm().catch(() => undefined);
   };
 
   const submitComposeText = () => {
@@ -1797,7 +1806,7 @@ export default function HomePage() {
               </p>
               {listeningYesNo ? (
                 <p className="muted listen-hint">
-                  응 · 아니 · 또는 “어제” / “시트 세탁”처럼 말해 주세요
+                  응 · 아니 · 날짜나 할일을 말해 고칠 수 있어요
                 </p>
               ) : null}
             </div>

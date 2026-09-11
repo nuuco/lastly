@@ -40,6 +40,8 @@ let worker: Worker | null = null;
 let loadPromise: Promise<void> | null = null;
 let onProgress: ((label: string) => void) | null = null;
 let lastError: string | null = null;
+/** 백그라운드 예열 중에는 false. 말하기/이해 요청이 오면 true로 바꿔 진행 문구 표시 */
+let reportLoadProgress = true;
 
 export function setParseProgressHandler(
   handler: ((label: string) => void) | null,
@@ -64,25 +66,32 @@ function getWorker() {
   return worker;
 }
 
-export async function loadLfm(): Promise<void> {
+/** 이해 모델 로드. 이미 받았으면 즉시 반환. silent면 진행 문구를 올리지 않음(백그라운드 예열) */
+export async function loadLfm(options?: { silent?: boolean }): Promise<void> {
+  if (!options?.silent) reportLoadProgress = true;
   if (loadPromise) return loadPromise;
   if (isAndroid()) disposeWhisper();
+  reportLoadProgress = options?.silent !== true;
   const current = getWorker();
   loadPromise = new Promise((resolve, reject) => {
     const handle = (event: MessageEvent<LfmOut>) => {
       const data = event.data;
       if (data.type === "progress") {
-        onProgress?.(understandLoadLabel(data.info));
+        if (reportLoadProgress) {
+          onProgress?.(understandLoadLabel(data.info));
+        }
       }
       if (data.type === "ready") {
         current.removeEventListener("message", handle);
         lastError = null;
+        reportLoadProgress = true;
         resolve();
       }
       if (data.type === "error") {
         current.removeEventListener("message", handle);
         lastError = data.message;
         loadPromise = null;
+        reportLoadProgress = true;
         reject(new Error(data.message));
       }
     };
