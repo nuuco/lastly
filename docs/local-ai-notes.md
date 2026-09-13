@@ -183,8 +183,8 @@ LASTLY처럼 `intent/action/date/interval`을 구조화해 뽑을 때 실험 가
 
 ## 관련 파일
 
-- 이해 워커: `src/recognition/lfm.worker.ts`  
+- 이해 워커: `src/recognition/gemma.worker.ts`  
 - 로드·폴백: `src/recognition/parse.ts`  
-- ORT 경로/장치: `src/recognition/pinOrtWasm.ts`, `src/recognition/ortDevice.ts`  
-- LFM 연결 확인: `public/lfm-check.html`  
+- Gemma 확인: `public/gemma-check.html`  
+- 전환·동작 확인: `docs/이해-모델-트러블슈팅.md`  
 - Node 벤치: `scripts/bench-runner/`, `npm run bench:models:node`
