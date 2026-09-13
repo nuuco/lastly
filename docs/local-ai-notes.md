@@ -186,5 +186,5 @@ LASTLY처럼 `intent/action/date/interval`을 구조화해 뽑을 때 실험 가
 - 이해 워커: `src/recognition/gemma.worker.ts`  
 - 로드·폴백: `src/recognition/parse.ts`  
 - Gemma 확인: `public/gemma-check.html`  
-- 전환·동작 확인: `docs/이해-모델-트러블슈팅.md`  
+- 트러블슈팅: `docs/troubleshooting-local-ai.md`  
 - Node 벤치: `scripts/bench-runner/`, `npm run bench:models:node`

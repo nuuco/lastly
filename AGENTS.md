@@ -128,4 +128,4 @@
 - Gemma MediaPipe 실험: Chrome WebGPU 워커 + /gemma-check.html, `npm run download:gemma`
 - Gemma JSON: 닫히기 전에는 생성 중단 안 함. `"null}`만 복구, 예정은 날짜 비움
 - Gemma 본선 결합: 이해·매칭·예열을 MediaPipe로. 동의 후에만 모델 로드, 없으면 규칙
-- 이해 모델 트러블슈팅: docs/이해-모델-트러블슈팅.md (LFM 실패 → Gemma 전환)
+- 이해 모델 트러블슈팅: docs/troubleshooting-local-ai.md (LFM 실패 → Gemma 전환)
