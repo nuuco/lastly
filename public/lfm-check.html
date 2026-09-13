@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LASTLY LFM 확인</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 40rem; margin: 1.5rem auto; padding: 0 1rem; }
+      pre { background: #f4f1ea; padding: 0.8rem; white-space: pre-wrap; min-height: 8rem; }
+      button { font: inherit; padding: 0.4rem 0.8rem; }
+      .warn { color: #b45309; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <h1>LFM 연결 확인 (Chrome 전용 1차)</h1>
+    <p>
+      지금은 <strong>Chrome</strong>에서만 확인합니다. Safari는 ORT jsep/WASM이
+      <code>10290256</code>으로 자주 죽습니다. Chrome에서 <code>LFM_OK</code>가 난 뒤 Safari를 봅니다.
+      ONNX 대신 MediaPipe Gemma를 보려면 <a href="/gemma-check.html">/gemma-check.html</a>입니다.
+    </p>
+    <p id="browser" class="warn"></p>
+    <button id="start" type="button">LFM 열기</button>
+    <pre id="log">대기</pre>
+    <script type="module">
+      import {
+        getLfmLoadError,
+        loadLfm,
+        setParseProgressHandler,
+      } from "/src/recognition/parse.ts";
+
+      const logEl = document.querySelector("#log");
+      const startEl = document.querySelector("#start");
+      const browserEl = document.querySelector("#browser");
+      const ua = navigator.userAgent;
+      const isChrome =
+        /Chrome|CriOS|Edg/i.test(ua) && !/OPR\//i.test(ua);
+      const isSafari =
+        /Safari/i.test(ua) && !/Chrome|CriOS|Android|Edg/i.test(ua);
+
+      browserEl.textContent = isChrome
+        ? "브라우저: Chrome 계열 — 이어서 진행하세요"
+        : isSafari
+          ? "브라우저: Safari — 지금은 Chrome으로 열어 주세요"
+          : `브라우저: 기타 — Chrome으로 열어 주세요 (${ua.slice(0, 80)}…)`;
+
+      function log(line) {
+        logEl.textContent += `\n${line}`;
+      }
+
+      startEl.addEventListener("click", async () => {
+        startEl.disabled = true;
+        logEl.textContent = "로드 중…";
+        const diag = [];
+        const push = (line) => {
+          diag.push(line);
+          log(line);
+        };
+        push(`ua ${ua}`);
+        push(`chrome=${isChrome} safari=${isSafari}`);
+        push(`isolated ${String(window.crossOriginIsolated)}`);
+        push(`navigator.gpu ${String(Boolean(navigator.gpu))}`);
+        try {
+          const adapter = navigator.gpu
+            ? await navigator.gpu.requestAdapter()
+            : null;
+          push(`adapter ${adapter ? "있음" : "없음"}`);
+        } catch (error) {
+          push(
+            `adapter 실패 ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        if (isSafari) {
+          push("SKIP · Safari는 1차 대상이 아닙니다. Chrome에서 다시 열어 주세요.");
+          startEl.disabled = false;
+          return;
+        }
+        setParseProgressHandler((line) => log(line));
+        const t0 = Date.now();
+        try {
+          await loadLfm();
+          log(`LFM_OK · 성공 ${Date.now() - t0}ms · LFM이 열렸습니다`);
+          log(`getLfmLoadError: ${getLfmLoadError() ?? "(없음)"}`);
+        } catch (error) {
+          log(`LFM_FAIL · 실패 ${Date.now() - t0}ms`);
+          log(error instanceof Error ? error.message : String(error));
+          log(`getLfmLoadError: ${getLfmLoadError() ?? "(없음)"}`);
+          log("--- 진단 요약 (복사용) ---");
+          for (const line of diag) log(line);
+          log("이 경우 앱은 규칙만으로 이해합니다.");
+        } finally {
+          setParseProgressHandler(null);
+          startEl.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

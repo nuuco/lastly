@@ -1,5 +1,11 @@
 node_modules
 dist
 *.local
+.env
 .DS_Store
 *.tsbuildinfo
+public/ort-runtime
+public/models/*.task
+public/models/*.litertlm
+bench-out
+scripts/bench-runner/node_modules

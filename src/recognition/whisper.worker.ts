@@ -1,7 +1,10 @@
 import { env, pipeline } from "@huggingface/transformers";
+import { hasWebGpu, ortDeviceOrder, type OrtDevice } from "./ortDevice";
+import { pinOrtWasm, probeOrtRuntime } from "./pinOrtWasm";
 
 env.allowLocalModels = false;
 env.useBrowserCache = true;
+pinOrtWasm();
 
 type Transcriber = (
   audio: Float32Array,
@@ -18,40 +21,62 @@ type In =
   | { type: "dispose" };
 
 let transcriber: Transcriber | null = null;
-let device: "webgpu" | "wasm" = "wasm";
+let device: OrtDevice = "wasm";
 
 async function load() {
-  const progress = (info: { status?: string; progress?: number; file?: string }) => {
+  const progress = (info: {
+    status?: string;
+    progress?: number;
+    file?: string;
+  }) => {
     self.postMessage({ type: "progress", info });
   };
-
-  try {
-    transcriber = (await pipeline(
-      "automatic-speech-recognition",
-      "onnx-community/whisper-base",
-      {
-        device: "webgpu",
-        dtype: {
-          encoder_model: "fp16",
-          decoder_model_merged: "q4",
-        },
-        progress_callback: progress,
-      },
-    )) as unknown as Transcriber;
-    device = "webgpu";
-  } catch {
-    transcriber = (await pipeline(
-      "automatic-speech-recognition",
-      "onnx-community/whisper-base",
-      {
-        device: "wasm",
-        dtype: "q8",
-        progress_callback: progress,
-      },
-    )) as unknown as Transcriber;
-    device = "wasm";
+  await probeOrtRuntime();
+  const order = ortDeviceOrder(
+    self.navigator?.userAgent ?? "",
+    hasWebGpu((self.navigator as { gpu?: unknown } | undefined)?.gpu),
+  );
+  let lastError: unknown;
+  for (const next of order) {
+    try {
+      if (next === "webgpu") {
+        transcriber = (await pipeline(
+          "automatic-speech-recognition",
+          "onnx-community/whisper-base",
+          {
+            device: "webgpu",
+            dtype: {
+              encoder_model: "fp16",
+              decoder_model_merged: "q4",
+            },
+            progress_callback: progress,
+          },
+        )) as unknown as Transcriber;
+      } else {
+        transcriber = (await pipeline(
+          "automatic-speech-recognition",
+          "onnx-community/whisper-base",
+          {
+            device: "wasm",
+            dtype: "q8",
+            progress_callback: progress,
+          },
+        )) as unknown as Transcriber;
+      }
+      device = next;
+      self.postMessage({
+        type: "ready",
+        device,
+        model: "onnx-community/whisper-base",
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+    }
   }
-  self.postMessage({ type: "ready", device, model: "onnx-community/whisper-base" });
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(String(lastError ?? "Whisper 로드 실패"));
 }
 
 self.onmessage = async (event: MessageEvent<In>) => {

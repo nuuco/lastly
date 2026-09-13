@@ -1,8 +1,16 @@
 import { env, pipeline } from "@huggingface/transformers";
 import { parseIntent } from "./intent";
+import type { OrtDevice } from "./ortDevice";
+import {
+  describeOrtWasm,
+  formatOrtError,
+  pinOrtWasm,
+  probeOrtRuntime,
+} from "./pinOrtWasm";
 
 env.allowLocalModels = false;
 env.useBrowserCache = true;
+pinOrtWasm();
 
 type Generator = (
   messages: unknown,
@@ -10,41 +18,42 @@ type Generator = (
 ) => Promise<unknown>;
 
 type In =
-  | { type: "load" }
+  | { type: "load"; device: OrtDevice }
   | { type: "extract"; text: string; today: string }
   | { type: "match"; query: string; labels: string[] }
   | { type: "dispose" };
 
 let generator: Generator | null = null;
-let device: "webgpu" | "wasm" = "wasm";
+let device: OrtDevice = "wasm";
 
-async function load() {
-  const progress = (info: { status?: string; progress?: number; file?: string }) => {
+async function load(next: OrtDevice) {
+  const progress = (info: {
+    status?: string;
+    progress?: number;
+    file?: string;
+  }) => {
     self.postMessage({ type: "progress", info });
   };
-  try {
-    generator = (await pipeline(
-      "text-generation",
-      "onnx-community/LFM2.5-350M-ONNX",
-      {
-        device: "webgpu",
-        dtype: "q4",
-        progress_callback: progress,
-      },
-    )) as unknown as Generator;
-    device = "webgpu";
-  } catch {
-    generator = (await pipeline(
-      "text-generation",
-      "onnx-community/LFM2.5-350M-ONNX",
-      {
-        device: "wasm",
-        dtype: "q4",
-        progress_callback: progress,
-      },
-    )) as unknown as Generator;
-    device = "wasm";
-  }
+  pinOrtWasm();
+  self.postMessage({ type: "log", message: await probeOrtRuntime() });
+  self.postMessage({ type: "log", message: describeOrtWasm() });
+  self.postMessage({
+    type: "log",
+    message: `시도 ${next} (jsep) · gpu=${String(
+      "gpu" in self.navigator &&
+        Boolean((self.navigator as { gpu?: unknown }).gpu),
+    )}`,
+  });
+  generator = (await pipeline(
+    "text-generation",
+    "onnx-community/LFM2.5-350M-ONNX",
+    {
+      device: next,
+      dtype: "q4",
+      progress_callback: progress,
+    },
+  )) as unknown as Generator;
+  device = next;
   self.postMessage({
     type: "ready",
     device,
@@ -86,7 +95,7 @@ async function generate(
   messages: unknown,
   maxNewTokens: number,
 ): Promise<string> {
-  if (!generator) await load();
+  if (!generator) await load(device);
   if (!generator) throw new Error("LFM 로드 실패");
   const output = await generator(messages, {
     max_new_tokens: maxNewTokens,
@@ -124,7 +133,7 @@ self.onmessage = async (event: MessageEvent<In>) => {
   const data = event.data;
   try {
     if (data.type === "load") {
-      await load();
+      await load(data.device);
       return;
     }
     if (data.type === "dispose") {
@@ -202,7 +211,7 @@ ${list}
   } catch (error) {
     self.postMessage({
       type: "error",
-      message: error instanceof Error ? error.message : String(error),
+      message: formatOrtError(error),
     });
   }
 };
