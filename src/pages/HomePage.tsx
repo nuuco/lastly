@@ -48,6 +48,13 @@ import {
   parseUtterance,
   setParseProgressHandler,
 } from "../recognition/parse";
+import {
+  gemmaNetworkHint,
+  getGemmaConsent,
+  readNavigatorConnection,
+  setGemmaConsent,
+} from "../recognition/gemmaConsent";
+import { probeGemmaModel } from "../recognition/gemmaOnDevice";
 import { stripPrefix } from "../recognition/prefix";
 import {
   hasWebGpu,
@@ -167,6 +174,8 @@ export default function HomePage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [unreadCount, setUnreadCount] = useState(0);
+  const [modelOffer, setModelOffer] = useState(false);
+  const [modelHint, setModelHint] = useState("");
   const [answerText, setAnswerText] = useState("");
   const [answerRow, setAnswerRow] = useState<RecordRow | null>(null);
   const [answerCandidates, setAnswerCandidates] = useState<RecordRow[]>([]);
@@ -223,9 +232,26 @@ export default function HomePage() {
     void hasWebGpu().then((webgpu) =>
       setDebug((prev) => ({ ...prev, webgpu })),
     );
-    // 첫 말하기 직후 이해 대기를 줄이려고, 홈 진입 후 이해 모델을 미리 받음
     const warmId = window.setTimeout(() => {
-      void loadLfm({ silent: true }).catch(() => undefined);
+      void (async () => {
+        const consent = getGemmaConsent();
+        if (consent === "accepted") {
+          await loadLfm({ silent: true }).catch(() => undefined);
+          return;
+        }
+        if (consent === "declined") return;
+        const gpu = await hasWebGpu();
+        if (!gpu) return;
+        const file = await probeGemmaModel();
+        if (!file.ok) return;
+        const net = gemmaNetworkHint(readNavigatorConnection());
+        setModelHint(
+          net === "cellular"
+            ? "약 670MB입니다. Wi-Fi에서 받는 게 좋아요."
+            : "말을 더 잘 이해하려면 모델을 받아 주세요. 약 670MB, 이 기기에만 두어요.",
+        );
+        setModelOffer(true);
+      })();
     }, 600);
     return () => window.clearTimeout(warmId);
   }, []);
@@ -261,6 +287,23 @@ export default function HomePage() {
     if (levelSourceRef.current === "mic") return;
     levelSourceRef.current = "speech";
     setVoiceLevel(0.72);
+  };
+
+  const acceptUnderstandModel = async () => {
+    setGemmaConsent("accepted");
+    setModelOffer(false);
+    setStatus("이해할 준비를 하고 있어요");
+    try {
+      await loadLfm();
+      setStatus("");
+    } catch {
+      setStatus("이해 모델을 열지 못했어요. 규칙으로도 기록할 수 있어요");
+    }
+  };
+
+  const declineUnderstandModel = () => {
+    setGemmaConsent("declined");
+    setModelOffer(false);
   };
 
   const changeView = (mode: ViewMode) => {
@@ -1054,6 +1097,20 @@ export default function HomePage() {
           </Link>
         </div>
       </div>
+
+      {modelOffer ? (
+        <div className="model-banner">
+          <p>{modelHint}</p>
+          <div className="model-banner-actions">
+            <button type="button" onClick={() => void acceptUnderstandModel()}>
+              받기
+            </button>
+            <button type="button" className="later" onClick={declineUnderstandModel}>
+              나중에
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="status-filters" role="tablist" aria-label="상태 필터">
         <button
@@ -2076,7 +2133,7 @@ function hearingLabel(debug: RecognitionDebug): string {
 function understandingLabel(debug: RecognitionDebug): string {
   if (debug.loadError) return "자세한 이해는 직접 확인해 주세요";
   const provider = debug.parseProvider;
-  if (provider.includes("lfm") || provider.includes("llm")) {
+  if (provider.includes("lfm") || provider.includes("llm") || provider.includes("gemma")) {
     return "문장을 이해해 봤어요";
   }
   if (provider.includes("regex")) return "날짜를 문장에서 찾았어요";

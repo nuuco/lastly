@@ -1,160 +1,66 @@
-import type { ParseResult, UtteranceType } from "../lib/types";
+import type { ParseResult } from "../lib/types";
 import { todayKst } from "../lib/kst";
 import { classifyUtterance, guessAction } from "./utteranceRules";
 import { extractRelativeDate } from "./dates";
 import { extractSchedule } from "./intervals";
 import { disposeWhisper } from "./stt";
-import { understandLoadLabel } from "./progressLabel";
-
-type LfmOut =
-  | { type: "ready"; device: "webgpu" | "wasm"; model: string }
-  | { type: "progress"; info: { status?: string; progress?: number; file?: string } }
-  | {
-      type: "result";
-      utteranceType: UtteranceType | null;
-      action: string | null;
-      date: string | null;
-      interval: string | null;
-      device: "webgpu" | "wasm";
-      latencyMs: number;
-      model: string;
-      raw: string;
-    }
-  | {
-      type: "match-result";
-      label: string | null;
-      device: "webgpu" | "wasm";
-      latencyMs: number;
-      raw: string;
-    }
-  | { type: "error"; message: string };
+import { getGemmaConsent } from "./gemmaConsent";
+import {
+  extractWithGemma,
+  getGemmaLoadError,
+  loadGemma,
+  matchWithGemma,
+  setGemmaProgressHandler,
+} from "./gemmaOnDevice";
 
 export type LfmSlots = {
-  intent: UtteranceType | null;
+  intent: ParseResult["utteranceType"] | null;
   action: string | null;
   date: string | null;
   interval: string | null;
 };
 
-let worker: Worker | null = null;
-let loadPromise: Promise<void> | null = null;
+function isAndroid() {
+  return /Android/i.test(navigator.userAgent);
+}
+
 let onProgress: ((label: string) => void) | null = null;
-let lastError: string | null = null;
-/** 백그라운드 예열 중에는 false. 말하기/이해 요청이 오면 true로 바꿔 진행 문구 표시 */
-let reportLoadProgress = true;
 
 export function setParseProgressHandler(
   handler: ((label: string) => void) | null,
 ) {
   onProgress = handler;
+  setGemmaProgressHandler(handler);
 }
 
 export function getLfmLoadError(): string | null {
-  return lastError;
+  return getGemmaLoadError();
 }
 
-function isAndroid() {
-  return /Android/i.test(navigator.userAgent);
-}
-
-function getWorker() {
-  if (!worker) {
-    worker = new Worker(new URL("./lfm.worker.ts", import.meta.url), {
-      type: "module",
-    });
-  }
-  return worker;
-}
-
-/** 이해 모델 로드. 이미 받았으면 즉시 반환. silent면 진행 문구를 올리지 않음(백그라운드 예열) */
+/** 이해 모델(Gemma) 로드. 동의 전이면 silent는 그냥 넘어가고, 말하기 중이면 규칙으로 간다. */
 export async function loadLfm(options?: { silent?: boolean }): Promise<void> {
-  if (!options?.silent) reportLoadProgress = true;
-  if (loadPromise) return loadPromise;
+  if (getGemmaConsent() !== "accepted") {
+    if (options?.silent) return;
+    throw new Error("이해 모델 동의가 필요해요");
+  }
   if (isAndroid()) disposeWhisper();
-  reportLoadProgress = options?.silent !== true;
-  const current = getWorker();
-  loadPromise = new Promise((resolve, reject) => {
-    const handle = (event: MessageEvent<LfmOut>) => {
-      const data = event.data;
-      if (data.type === "progress") {
-        if (reportLoadProgress) {
-          onProgress?.(understandLoadLabel(data.info));
-        }
-      }
-      if (data.type === "ready") {
-        current.removeEventListener("message", handle);
-        lastError = null;
-        reportLoadProgress = true;
-        resolve();
-      }
-      if (data.type === "error") {
-        current.removeEventListener("message", handle);
-        lastError = data.message;
-        loadPromise = null;
-        reportLoadProgress = true;
-        reject(new Error(data.message));
-      }
-    };
-    current.addEventListener("message", handle);
-    current.postMessage({ type: "load" });
-  });
-  return loadPromise;
-}
-
-function extractWithLfm(text: string, today: string) {
-  const current = getWorker();
-  return new Promise<LfmSlots>((resolve, reject) => {
-    const handle = (event: MessageEvent<LfmOut>) => {
-      const data = event.data;
-      if (data.type === "result") {
-        current.removeEventListener("message", handle);
-        resolve({
-          intent: data.utteranceType,
-          action: data.action,
-          date: data.date,
-          interval: data.interval,
-        });
-      }
-      if (data.type === "error") {
-        current.removeEventListener("message", handle);
-        lastError = data.message;
-        reject(new Error(data.message));
-      }
-    };
-    current.addEventListener("message", handle);
-    current.postMessage({ type: "extract", text, today });
-  });
+  await loadGemma({ silent: options?.silent });
 }
 
 const MAX_MATCH_LABELS = 24;
 
-/** 기존 기록 이름 중에서 같은 행위인지 LFM이 고른다. 다르면 null */
+/** 기존 기록 이름 중에서 같은 행위인지 Gemma가 고른다. 다르면 null */
 export async function matchActionWithLfm(
   query: string,
   labels: string[],
 ): Promise<string | null> {
   const unique = [...new Set(labels.map((label) => label.trim()).filter(Boolean))];
   if (!query.trim() || unique.length === 0) return null;
+  if (getGemmaConsent() !== "accepted") return null;
   onProgress?.("같은 일인지 보고 있어요");
   await loadLfm();
-  const current = getWorker();
   const picked = unique.slice(0, MAX_MATCH_LABELS);
-  return new Promise((resolve, reject) => {
-    const handle = (event: MessageEvent<LfmOut>) => {
-      const data = event.data;
-      if (data.type === "match-result") {
-        current.removeEventListener("message", handle);
-        resolve(data.label);
-      }
-      if (data.type === "error") {
-        current.removeEventListener("message", handle);
-        lastError = data.message;
-        reject(new Error(data.message));
-      }
-    };
-    current.addEventListener("message", handle);
-    current.postMessage({ type: "match", query: query.trim(), labels: picked });
-  });
+  return matchWithGemma(query.trim(), picked);
 }
 
 function looksIso(value: string | null): value is string {
@@ -201,7 +107,7 @@ export function applyLfmSlots(
     date: utteranceType === "planned" ? null : date,
     schedule,
     confidenceSource: "llm",
-    provider: "lfm2.5-350m-q4",
+    provider: "gemma3-1b",
     reason:
       rules.utteranceType === "incomplete"
         ? `${rules.reason} · 부정은 규칙 유지`
@@ -209,7 +115,7 @@ export function applyLfmSlots(
             extracted.intent &&
             extracted.intent !== "completed"
           ? `${rules.reason} · 완료 표지는 규칙 유지`
-          : `LFM 유형 ${utteranceType} · 할일·날짜·주기 추출`,
+          : `Gemma 유형 ${utteranceType} · 할일·날짜·주기 추출`,
   };
 }
 
@@ -219,16 +125,20 @@ export async function parseUtterance(raw: string): Promise<ParseResult> {
   try {
     onProgress?.("할일과 날짜를 정리하는 중");
     await loadLfm();
-    const extracted = await extractWithLfm(raw, todayKst());
+    const extracted = await extractWithGemma(raw, todayKst());
     return applyLfmSlots(raw, rules, extracted);
   } catch {
+    const loadError = getGemmaLoadError();
+    const noConsent = getGemmaConsent() !== "accepted";
     return {
       ...rules,
       date: extractRelativeDate(raw)?.date ?? rules.date,
       provider: "utterance-rules",
-      reason: lastError
-        ? `${rules.reason} · LFM 로드 실패, 규칙만 사용`
-        : rules.reason,
+      reason: noConsent
+        ? `${rules.reason} · 규칙으로 이해`
+        : loadError
+          ? `${rules.reason} · 이해 모델을 못 열어 규칙만 사용`
+          : rules.reason,
     };
   }
 }

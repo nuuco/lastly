@@ -11,6 +11,113 @@ import {
   saveVoiceGuideEnabled,
 } from "../lib/settings";
 import type { NotifySettings } from "../lib/types";
+import {
+  getGemmaConsent,
+  setGemmaConsent,
+} from "../recognition/gemmaConsent";
+import {
+  disposeGemma,
+  isGemmaReady,
+  probeGemmaModel,
+} from "../recognition/gemmaOnDevice";
+import { loadLfm } from "../recognition/parse";
+import { hasWebGpu } from "../recognition/stt";
+
+function UnderstandModelSettings() {
+  const [status, setStatus] = useState("확인 중…");
+  const [busy, setBusy] = useState(false);
+  const [consent, setConsent] = useState(() => getGemmaConsent());
+  const [available, setAvailable] = useState(false);
+
+  const refresh = async () => {
+    const gpu = await hasWebGpu();
+    const file = await probeGemmaModel();
+    setAvailable(gpu && file.ok);
+    const next = getGemmaConsent();
+    setConsent(next);
+    if (!gpu) {
+      setStatus("이 브라우저는 GPU 이해가 안 돼요");
+      return;
+    }
+    if (!file.ok) {
+      setStatus("모델 파일이 아직 없어요");
+      return;
+    }
+    if (isGemmaReady()) {
+      setStatus("준비됨");
+      return;
+    }
+    if (next === "accepted") {
+      setStatus("받을 수 있음 · 약 670MB");
+      return;
+    }
+    if (next === "declined") {
+      setStatus("꺼져 있음");
+      return;
+    }
+    setStatus("받을 수 있음 · 약 670MB");
+  };
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  const accept = async () => {
+    setBusy(true);
+    setGemmaConsent("accepted");
+    setConsent("accepted");
+    setStatus("받는 중…");
+    try {
+      await loadLfm();
+      setStatus("준비됨");
+    } catch {
+      setStatus("열지 못했어요");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const decline = () => {
+    setGemmaConsent("declined");
+    setConsent("declined");
+    disposeGemma();
+    setStatus("꺼져 있음");
+  };
+
+  return (
+    <>
+      <div className="settings-row" style={{ cursor: "default" }}>
+        <span>이해 모델</span>
+        <span className="settings-muted">{status}</span>
+      </div>
+      {available && consent !== "accepted" ? (
+        <button
+          type="button"
+          className="settings-row"
+          disabled={busy}
+          onClick={() => void accept()}
+        >
+          모델 받기
+        </button>
+      ) : null}
+      {consent === "accepted" && status !== "준비됨" && available ? (
+        <button
+          type="button"
+          className="settings-row"
+          disabled={busy}
+          onClick={() => void accept()}
+        >
+          다시 열기
+        </button>
+      ) : null}
+      {consent === "accepted" ? (
+        <button type="button" className="settings-row" onClick={decline}>
+          모델 끄기
+        </button>
+      ) : null}
+    </>
+  );
+}
 
 export default function SettingsPage() {
   const [perm, setPerm] = useState<NotificationPermission | "unsupported">(
@@ -130,6 +237,9 @@ export default function SettingsPage() {
               </div>
             </>
           ) : null}
+        </div>
+        <div className="settings-card">
+          <UnderstandModelSettings />
         </div>
         <div className="settings-card">
           <button
