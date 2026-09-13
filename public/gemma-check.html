@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LASTLY Gemma 확인</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 40rem; margin: 1.5rem auto; padding: 0 1rem; }
+      pre { background: #f4f1ea; padding: 0.8rem; white-space: pre-wrap; min-height: 8rem; }
+      button, input { font: inherit; padding: 0.4rem 0.8rem; }
+      input { width: 100%; box-sizing: border-box; margin: 0.4rem 0; }
+      .warn { color: #b45309; font-weight: 600; }
+      .row { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.6rem 0; }
+    </style>
+  </head>
+  <body>
+    <h1>Gemma 연결 확인 (Chrome · MediaPipe)</h1>
+    <p>
+      LFM(ONNX)이 아니라 <strong>브라우저 WebGPU + MediaPipe + Gemma 3 1B</strong>입니다.
+      앱 본선은 아직 LFM입니다. 이 페이지는 실험입니다.
+    </p>
+    <p>
+      모델이 없으면 프로젝트 루트에 <code>.env</code>(<code>HF_TOKEN</code>)를 두고
+      <code>npm run download:gemma</code>를 실행하세요. 약 700MB, Wi-Fi.
+    </p>
+    <p id="browser" class="warn"></p>
+    <div class="row">
+      <button id="start" type="button">Gemma 열기</button>
+      <button id="run" type="button" disabled>문장 이해</button>
+    </div>
+    <input id="text" type="text" value="어제 빨래했어" />
+    <div class="row">
+      <button type="button" data-sample="어제 빨래했어">어제 빨래했어</button>
+      <button type="button" data-sample="오늘 강아지 산책했어">오늘 산책</button>
+      <button type="button" data-sample="시트 세탁 언제 했지">언제 했지</button>
+      <button type="button" data-sample="이불은 2주마다 빨 거야">2주마다</button>
+    </div>
+    <pre id="log">대기</pre>
+    <script type="module">
+      import {
+        extractWithGemma,
+        getGemmaLoadError,
+        loadGemma,
+        probeGemmaModel,
+        setGemmaProgressHandler,
+      } from "/src/recognition/gemmaOnDevice.ts";
+      import { todayKst } from "/src/lib/kst.ts";
+
+      const logEl = document.querySelector("#log");
+      const startEl = document.querySelector("#start");
+      const runEl = document.querySelector("#run");
+      const textEl = document.querySelector("#text");
+      const browserEl = document.querySelector("#browser");
+      const ua = navigator.userAgent;
+      const isChrome = /Chrome|CriOS|Edg/i.test(ua) && !/OPR\//i.test(ua);
+      const isSafari =
+        /Safari/i.test(ua) && !/Chrome|CriOS|Android|Edg/i.test(ua);
+
+      browserEl.textContent = isChrome
+        ? "브라우저: Chrome 계열 — 이어서 진행하세요"
+        : isSafari
+          ? "브라우저: Safari — WebGPU가 있어도 MediaPipe는 Chrome에서 먼저 보세요"
+          : `브라우저: 기타 — Chrome으로 열어 주세요 (${ua.slice(0, 80)}…)`;
+
+      function log(line) {
+        logEl.textContent += `\n${line}`;
+      }
+
+      for (const button of document.querySelectorAll("[data-sample]")) {
+        button.addEventListener("click", () => {
+          textEl.value = button.getAttribute("data-sample");
+        });
+      }
+
+      startEl.addEventListener("click", async () => {
+        startEl.disabled = true;
+        logEl.textContent = "로드 중…";
+        log(`ua ${ua}`);
+        log(`chrome=${isChrome} safari=${isSafari}`);
+        log(`navigator.gpu ${String(Boolean(navigator.gpu))}`);
+        try {
+          const adapter = navigator.gpu
+            ? await navigator.gpu.requestAdapter()
+            : null;
+          log(`adapter ${adapter ? "있음" : "없음"}`);
+        } catch (error) {
+          log(`adapter 실패 ${error instanceof Error ? error.message : String(error)}`);
+        }
+        try {
+          const file = await probeGemmaModel();
+          const mb = file.bytes
+            ? `${(file.bytes / (1024 * 1024)).toFixed(1)}MB`
+            : "크기 모름";
+          log(`모델 HEAD ${file.status} ${file.ok ? mb : "없음"}`);
+        } catch (error) {
+          log(`모델 HEAD 실패 ${error instanceof Error ? error.message : String(error)}`);
+        }
+        setGemmaProgressHandler((line) => log(line));
+        const t0 = Date.now();
+        try {
+          await loadGemma();
+          log(`GEMMA_OK · 성공 ${Date.now() - t0}ms · Gemma가 열렸습니다`);
+          log(`getGemmaLoadError: ${getGemmaLoadError() ?? "(없음)"}`);
+          runEl.disabled = false;
+        } catch (error) {
+          log(`GEMMA_FAIL · 실패 ${Date.now() - t0}ms`);
+          log(error instanceof Error ? error.message : String(error));
+          log(`getGemmaLoadError: ${getGemmaLoadError() ?? "(없음)"}`);
+          startEl.disabled = false;
+        } finally {
+          setGemmaProgressHandler(null);
+        }
+      });
+
+      runEl.addEventListener("click", async () => {
+        const text = textEl.value.trim();
+        if (!text) return;
+        runEl.disabled = true;
+        log(`--- 이해 ${text} ---`);
+        try {
+          const result = await extractWithGemma(text, todayKst());
+          log(`intent ${result.intent} · action ${result.action} · date ${result.date} · interval ${result.interval}`);
+          log(`latency ${result.latencyMs}ms`);
+          log(`raw ${result.raw}`);
+        } catch (error) {
+          log(error instanceof Error ? error.message : String(error));
+        } finally {
+          runEl.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
