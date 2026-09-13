@@ -122,3 +122,9 @@
 - 저장 매칭: 단어 겹침 대신 LFM이 같은 행위인지 보고, 다르면 새 항목
 - 확인 힌트: 예문 대신 날짜·할일을 말해 고칠 수 있다고 안내
 - LFM 예열: 홈 진입·마이크/글입력 시 미리 로드해 첫 이해 대기 완화
+- Chrome LFM: ort.bundle + jsep.wasm만 경로 지정. Safari는 /lfm-check에서 1차 SKIP.
+- Node LFM 벤치: `npm run bench:models:node -- --limit=1` (transformers 4.2 CPU, 결과 bench-out/)
+- 로컬 AI·모델·용어 정리: docs/local-ai-notes.md
+- Gemma MediaPipe 실험: Chrome WebGPU 워커 + /gemma-check.html, `npm run download:gemma`
+- Gemma JSON: 닫히기 전에는 생성 중단 안 함. `"null}`만 복구, 예정은 날짜 비움
+- Gemma 본선 결합: 이해·매칭·예열을 MediaPipe로. 동의 후에만 모델 로드, 없으면 규칙
